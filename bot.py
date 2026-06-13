@@ -202,7 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # دستور مخصوص ادمین برای دریافت دیتابیس
 async def get_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # فقط ادمین بتونه ببینه (ایدی تلگرام خودت رو بذار)
-    ADMIN_ID = 123456789  # ایدی عددی خودت رو بذار اینجا
+    ADMIN_ID = 8065571732  # ایدی عددی خودت رو بذار اینجا
     
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔ شما دسترسی به این بخش ندارید!")
