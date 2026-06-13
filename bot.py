@@ -1,6 +1,6 @@
 import os
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from groq import Groq
 
 # خواندن توکن‌ها از متغیرهای محیطی
@@ -10,7 +10,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # ساختن کلاینت Groq
 client = Groq(api_key=GROQ_API_KEY)
 
-# تابع خوش‌آمدگویی با عکس و متن تو
+# تابع خوش‌آمدگویی با عکس و متن
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # باز کردن فایل عکس از پوشه images
@@ -36,11 +36,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # تابع پاسخگویی به پیام‌ها
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # چک کردن دستور start
-    if update.message.text == "/start":
-        await start(update, context)
-        return
-    
     user_text = update.message.text
     
     try:
@@ -72,6 +67,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # اضافه کردن هندلرها
+app.add_handler(CommandHandler("start", start))  # این خط برای دستور /start
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print("🤖 بات با موفقیت روشن شد...")
