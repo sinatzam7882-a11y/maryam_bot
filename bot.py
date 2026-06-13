@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import json
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -8,104 +8,82 @@ from groq import Groq
 # ==================== تنظیمات ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_ID = 8065571732  # 🔴 ایدی خودت رو بذار اینجا
+ADMIN_ID = 8065571732  # 🔴 ایدی خودت رو بذار اینجا (از @userinfobot بگیر)
 
 client = Groq(api_key=GROQ_API_KEY)
-DB_PATH = "users_data.db"
 
-# ==================== راه‌اندازی دیتابیس ====================
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # جدول اطلاعات کاربران
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        first_name TEXT,
-        last_name TEXT,
-        business_name TEXT,
-        birth_date TEXT,
-        phone TEXT,
-        address TEXT,
-        referral_source TEXT,
-        register_date TEXT
-    )''')
-    
-    # جدول پاسخ پرسشنامه
-    c.execute('''CREATE TABLE IF NOT EXISTS answers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        q1 TEXT,
-        q2 TEXT,
-        q3 TEXT,
-        q4 TEXT,
-        q5 TEXT,
-        q6 TEXT,
-        q7 TEXT,
-        submit_date TEXT
-    )''')
-    
-    # جدول وضعیت کاربر
-    c.execute('''CREATE TABLE IF NOT EXISTS status (
-        user_id INTEGER PRIMARY KEY,
-        step INTEGER DEFAULT 0,
-        temp TEXT
-    )''')
-    
-    conn.commit()
-    conn.close()
-    print("✅ دیتابیس آماده شد")
+# فایل‌های JSON برای ذخیره اطلاعات
+USERS_FILE = "users.json"
+SURVEY_FILE = "survey.json"
+STATUS_FILE = "status.json"
 
-# ==================== توابع دیتابیس ====================
-def save_user(user_id, data):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO users 
-        (user_id, first_name, last_name, business_name, birth_date, phone, address, referral_source, register_date)
-        VALUES (?,?,?,?,?,?,?,?,?)''',
-        (user_id, data.get('first_name',''), data.get('last_name',''), data.get('business_name',''),
-         data.get('birth_date',''), data.get('phone',''), data.get('address',''), 
-         data.get('referral_source',''), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+# ==================== توابع خواندن و نوشتن JSON ====================
+def read_json(file_path, default={}):
+    """خواندن اطلاعات از فایل JSON"""
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return default
+    return default
 
-def save_answers(user_id, answers):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''INSERT INTO answers 
-        (user_id, q1, q2, q3, q4, q5, q6, q7, submit_date)
-        VALUES (?,?,?,?,?,?,?,?,?)''',
-        (user_id, answers.get('q1',''), answers.get('q2',''), answers.get('q3',''),
-         answers.get('q4',''), answers.get('q5',''), answers.get('q6',''), answers.get('q7',''),
-         datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+def write_json(file_path, data):
+    """نوشتن اطلاعات در فایل JSON"""
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def get_status(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT step, temp FROM status WHERE user_id = ?', (user_id,))
-    r = c.fetchone()
-    conn.close()
-    if r:
-        return {'step': r[0], 'temp': r[1] if r[1] else '{}'}
-    return {'step': 0, 'temp': '{}'}
+# ==================== توابع ذخیره و بازیابی اطلاعات ====================
+def save_user_info(user_id, info):
+    """ذخیره اطلاعات کاربر"""
+    users = read_json(USERS_FILE, {})
+    users[str(user_id)] = {
+        **info,
+        "register_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    write_json(USERS_FILE, users)
+    print(f"✅ اطلاعات کاربر {user_id} ذخیره شد")
 
-def set_status(user_id, step, temp=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO status (user_id, step, temp) VALUES (?,?,?)', 
-              (user_id, step, temp if temp else '{}'))
-    conn.commit()
-    conn.close()
+def get_user_info(user_id):
+    """دریافت اطلاعات یک کاربر"""
+    users = read_json(USERS_FILE, {})
+    return users.get(str(user_id))
 
-def is_registered(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT 1 FROM users WHERE user_id = ?', (user_id,))
-    r = c.fetchone()
-    conn.close()
-    return r is not None
+def save_survey_answers(user_id, answers):
+    """ذخیره پاسخ‌های پرسشنامه"""
+    all_surveys = read_json(SURVEY_FILE, {})
+    all_surveys[str(user_id)] = {
+        **answers,
+        "submit_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    write_json(SURVEY_FILE, all_surveys)
+    print(f"✅ پرسشنامه کاربر {user_id} ذخیره شد")
+
+def get_user_status(user_id):
+    """دریافت مرحله فعلی کاربر"""
+    statuses = read_json(STATUS_FILE, {})
+    return statuses.get(str(user_id), {"step": 0, "temp": {}})
+
+def set_user_status(user_id, step, temp_data=None):
+    """تنظیم مرحله کاربر"""
+    statuses = read_json(STATUS_FILE, {})
+    statuses[str(user_id)] = {
+        "step": step,
+        "temp": temp_data if temp_data else {}
+    }
+    write_json(STATUS_FILE, statuses)
+
+def delete_user_status(user_id):
+    """حذف وضعیت کاربر بعد از اتمام"""
+    statuses = read_json(STATUS_FILE, {})
+    if str(user_id) in statuses:
+        del statuses[str(user_id)]
+        write_json(STATUS_FILE, statuses)
+
+def is_user_registered(user_id):
+    """بررسی ثبت‌نام کاربر"""
+    users = read_json(USERS_FILE, {})
+    return str(user_id) in users
 
 # ==================== متن سوالات ====================
 REG_QUESTIONS = [
@@ -129,106 +107,196 @@ SURVEY_QUESTIONS = [
 ]
 
 # ==================== دکمه ====================
-reg_btn = ReplyKeyboardMarkup([[KeyboardButton("📝 ثبت‌نام")]], resize_keyboard=True)
+reg_btn = ReplyKeyboardMarkup(
+    [[KeyboardButton("📝 ثبت‌نام در باشگاه مشتریان")]],
+    resize_keyboard=True
+)
 
-# ==================== توابع اصلی ====================
-async def start(update: Update, ctx):
-    uid = update.effective_user.id
+# ==================== دستور start ====================
+async def start(update: Update, context):
+    user_id = update.effective_user.id
     
-    if is_registered(uid):
-        await update.message.reply_text("✅ قبلاً ثبت‌نام کردی! سوالت رو بپرس.")
+    if is_user_registered(user_id):
+        await update.message.reply_text(
+            "✅ شما قبلاً ثبت‌نام کرده‌اید!\n\nحالا می‌توانید سوالات خود را بپرسید.",
+            reply_markup=reg_btn
+        )
         return
     
+    # نمایش عکس و پیام خوش‌آمدگویی
     try:
-        with open('images/welcome.jpg', 'rb') as f:
-            await update.message.reply_photo(f, caption="سلام سلام\nشهبازی هستم، مریم 😍🌱\n\nبرای شروع ثبت‌نام، روی دکمه زیر کلیک کن 👇", reply_markup=reg_btn)
-    except:
-        await update.message.reply_text("سلام سلام\nشهبازی هستم، مریم 😍🌱\n\nبرای شروع ثبت‌نام، روی دکمه زیر کلیک کن 👇", reply_markup=reg_btn)
+        with open('images/welcome.jpg', 'rb') as photo:
+            caption = """سلام سلام
+شهبازی هستم، مریم 😍🌱
+اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
+با من همراه باش
 
-async def reg_start(update: Update, ctx):
-    uid = update.effective_user.id
-    set_status(uid, 1)
+برای شروع روی دکمه زیر کلیک کن 👇"""
+            await update.message.reply_photo(
+                photo=photo,
+                caption=caption,
+                reply_markup=reg_btn
+            )
+    except FileNotFoundError:
+        await update.message.reply_text(
+            """سلام سلام
+شهبازی هستم، مریم 😍🌱
+اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
+با من همراه باش
+
+برای شروع روی دکمه زیر کلیک کن 👇""",
+            reply_markup=reg_btn
+        )
+
+# ==================== شروع ثبت‌نام ====================
+async def start_registration(update: Update, context):
+    user_id = update.effective_user.id
+    set_user_status(user_id, 1, {})
     await update.message.reply_text(f"✅ ثبت‌نام شروع شد!\n\n{REG_QUESTIONS[0][1]}")
 
-async def handle(update: Update, ctx):
-    uid = update.effective_user.id
+# ==================== پردازش اصلی پیام‌ها ====================
+async def handle_message(update: Update, context):
+    user_id = update.effective_user.id
     text = update.message.text
     
-    if text == "📝 ثبت‌نام":
-        await reg_start(update, ctx)
+    # اگر کاربر دکمه ثبت‌نام زد
+    if text == "📝 ثبت‌نام در باشگاه مشتریان":
+        await start_registration(update, context)
         return
     
-    status = get_status(uid)
-    step = status['step']
+    # دریافت وضعیت کاربر
+    status = get_user_status(user_id)
+    step = status.get("step", 0)
+    temp = status.get("temp", {})
     
-    # اگه ثبت‌نام کامل شده، به Groq پاسخ بده
-    if step == 0 and is_registered(uid):
+    # مرحله 0: کاربر در حال ثبت‌نام نیست -> پاسخ عادی از Groq
+    if step == 0:
+        # اگه ثبت‌نام نکرده، یادآوری کن
+        if not is_user_registered(user_id):
+            await update.message.reply_text(
+                "⚠️ لطفاً ابتدا ثبت‌نام کنید.\n\n"
+                "روی دکمه 📝 ثبت‌نام در باشگاه مشتریان کلیک کن.",
+                reply_markup=reg_btn
+            )
+            return
+        
+        # پاسخ عادی از Groq
         try:
-            r = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": text}])
-            await update.message.reply_text(r.choices[0].message.content)
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "تو یک دستیار هوشمند و مفید برای کسب و کار و برندسازی هستی. به فارسی و روان پاسخ بده."},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+            await update.message.reply_text(response.choices[0].message.content)
         except Exception as e:
-            await update.message.reply_text(f"⚠️ خطا: {e}")
+            await update.message.reply_text(f"⚠️ خطا: {str(e)}")
         return
     
-    # مرحله ثبت‌نام (1 تا 7)
+    # مرحله 1 تا 7: ثبت‌نام
     if 1 <= step <= 7:
-        import json
-        temp = json.loads(status['temp']) if status['temp'] else {}
-        field, _ = REG_QUESTIONS[step-1]
-        temp[field] = text
-        set_status(uid, step+1, json.dumps(temp))
+        idx = step - 1
+        field_name, _ = REG_QUESTIONS[idx]
+        temp[field_name] = text
         
         if step < 7:
-            _, q = REG_QUESTIONS[step]
-            await update.message.reply_text(q)
+            # مرحله بعدی
+            set_user_status(user_id, step + 1, temp)
+            _, next_q = REG_QUESTIONS[step]
+            await update.message.reply_text(next_q)
         else:
-            # ذخیره اطلاعات کاربر
-            save_user(uid, temp)
-            set_status(uid, 8)  # برو به مرحله پرسشنامه
-            await update.message.reply_text("✅ اطلاعات ثبت شد!\n\nحالا به سوالات زیر پاسخ بده:")
-            _, q = SURVEY_QUESTIONS[0]
-            await update.message.reply_text(q)
+            # آخرین مرحله ثبت‌نام - ذخیره اطلاعات
+            save_user_info(user_id, temp)
+            set_user_status(user_id, 8, {})  # برو به مرحله پرسشنامه
+            await update.message.reply_text(
+                "✅ اطلاعات شما با موفقیت ثبت شد!\n\n"
+                "📋 حالا لطفاً به سوالات تخصصی زیر پاسخ دهید:\n\n"
+                f"{SURVEY_QUESTIONS[0][1]}"
+            )
+        return
     
-    # مرحله پرسشنامه (8 تا 14)
-    elif 8 <= step <= 14:
-        import json
+    # مرحله 8 تا 14: پرسشنامه
+    if 8 <= step <= 14:
         idx = step - 8
-        temp = json.loads(status['temp']) if status['temp'] else {}
-        field, _ = SURVEY_QUESTIONS[idx]
-        temp[field] = text
-        set_status(uid, step+1, json.dumps(temp))
+        field_name, _ = SURVEY_QUESTIONS[idx]
+        temp[field_name] = text
         
         if idx + 1 < len(SURVEY_QUESTIONS):
-            _, q = SURVEY_QUESTIONS[idx+1]
-            await update.message.reply_text(q)
+            # سوال بعدی
+            set_user_status(user_id, step + 1, temp)
+            _, next_q = SURVEY_QUESTIONS[idx + 1]
+            await update.message.reply_text(next_q)
         else:
-            # ذخیره پاسخ‌ها
-            save_answers(uid, temp)
-            set_status(uid, 0)  # تمام شد
+            # اتمام پرسشنامه
+            save_survey_answers(user_id, temp)
+            delete_user_status(user_id)  # پاک کردن وضعیت
             await update.message.reply_text(
                 "🌹 **با تشکر از شما!** 🌹\n\n"
-                "اطلاعات شما ثبت شد.\n"
-                "✅ **ظرف ۴۸ ساعت با شما تماس می‌گیریم.**\n\n"
-                "حالا می‌تونی سوالت رو بپرسی.",
+                "اطلاعات شما با موفقیت ثبت شد.\n"
+                "✅ **ظرف ۴۸ ساعت آینده کارشناسان ما با شما تماس می‌گیرند.**\n\n"
+                "تا آن زمان می‌توانید سوالات خود را از من بپرسید.\n"
+                "موفق باشید 🚀",
                 parse_mode='Markdown'
             )
-
-async def get_db(update: Update, ctx):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ دسترسی ندارید!")
         return
-    try:
-        with open(DB_PATH, 'rb') as f:
-            await update.message.reply_document(f, filename='users_data.db')
-    except:
-        await update.message.reply_text("خطا!")
 
-# ==================== اجرا ====================
+# ==================== دستور دریافت فایل‌های JSON (فقط ادمین) ====================
+async def get_data(update: Update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ شما دسترسی به این بخش ندارید!")
+        return
+    
+    # ارسال فایل users.json
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'rb') as f:
+            await update.message.reply_document(document=f, filename='users.json')
+    else:
+        await update.message.reply_text("فایل users.json وجود ندارد")
+    
+    # ارسال فایل survey.json
+    if os.path.exists(SURVEY_FILE):
+        with open(SURVEY_FILE, 'rb') as f:
+            await update.message.reply_document(document=f, filename='survey.json')
+
+# ==================== دستور مشاهده خلاصه اطلاعات (فقط ادمین) ====================
+async def show_summary(update: Update, context):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ شما دسترسی به این بخش ندارید!")
+        return
+    
+    users = read_json(USERS_FILE, {})
+    surveys = read_json(SURVEY_FILE, {})
+    
+    if not users:
+        await update.message.reply_text("📭 هنوز کاربری ثبت‌نام نکرده است.")
+        return
+    
+    summary = f"📊 **آمار کلی:**\n"
+    summary += f"- تعداد کاربران ثبت‌نام شده: {len(users)}\n"
+    summary += f"- تعداد پرسشنامه‌های تکمیل شده: {len(surveys)}\n\n"
+    summary += "**آخرین کاربران:**\n"
+    
+    for i, (uid, info) in enumerate(list(users.items())[-5:]):
+        summary += f"{i+1}. {info.get('first_name', '')} {info.get('last_name', '')} - {info.get('business_name', '')}\n"
+    
+    await update.message.reply_text(summary, parse_mode='Markdown')
+
+# ==================== اجرای اصلی ====================
 app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("getdb", get_db))
-app.add_handler(MessageHandler(filters.TEXT, handle))
 
-init_db()
-print("🤖 بات روشن شد...")
+# اضافه کردن هندلرها
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("getdata", get_data))      # دریافت فایل‌های JSON
+app.add_handler(CommandHandler("summary", show_summary))   # مشاهده خلاصه
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+print("🤖 بات با موفقیت روشن شد...")
+print("📁 اطلاعات در فایل‌های JSON ذخیره می‌شوند:")
+print(f"   - {USERS_FILE} : اطلاعات کاربران")
+print(f"   - {SURVEY_FILE} : پاسخ‌های پرسشنامه")
+print("منتظر پیام‌های کاربران هستم...")
+
 app.run_polling()
