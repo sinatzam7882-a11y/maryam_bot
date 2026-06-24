@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = 8065571732  # 🔴 این رو با ایدی خودت عوض کن!
+CHANNEL_ID = "@synapdse_os"  # آیدی کانال
 
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -56,6 +57,7 @@ def save_user_info(user_id, info):
     if str(user_id) not in users:
         users[str(user_id)] = {}
     users[str(user_id)].update(info)
+    users[str(user_id)]["telegram_id"] = str(user_id)  # ذخیره آیدی تلگرام
     users[str(user_id)]["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_json(USERS_FILE, users)
     logger.info(f"✅ اطلاعات کاربر {user_id} ذخیره شد")
@@ -74,16 +76,22 @@ def get_user_info(user_id):
     return users.get(str(user_id), {})
 
 def is_user_registered(user_id):
-    """بررسی اینکه کاربر ثبت‌نام کرده یا نه"""
     users = read_json(USERS_FILE, {})
     user_data = users.get(str(user_id), {})
     return user_data.get("first_name") is not None and user_data.get("first_name") != ""
 
 def is_business_registered(user_id):
-    """بررسی اینکه کاربر اطلاعات کسب و کار رو ثبت کرده یا نه"""
     users = read_json(USERS_FILE, {})
     user_data = users.get(str(user_id), {})
     return user_data.get("business_name") is not None and user_data.get("business_name") != ""
+
+def is_member_of_channel(user_id, context):
+    """بررسی عضویت کاربر در کانال"""
+    try:
+        chat_member = context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return chat_member.status in ['member', 'administrator', 'creator']
+    except:
+        return False
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
@@ -95,7 +103,7 @@ def generate_excel_report():
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
-    headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "تاریخ تولد", 
+    headers = ["ردیف", "آیدی تلگرام", "نام", "نام خانوادگی", "تاریخ تولد", 
                "شماره تماس", "شهر", "نام کسب و کار", "آدرس", "راه معرفی", "تاریخ ثبت"]
     
     header_font = Font(bold=True, color="FFFFFF", size=12)
@@ -113,7 +121,7 @@ def generate_excel_report():
     
     for row, (user_id, info) in enumerate(users.items(), 2):
         ws1.cell(row=row, column=1, value=row-1)
-        ws1.cell(row=row, column=2, value=int(user_id) if user_id.isdigit() else user_id)
+        ws1.cell(row=row, column=2, value=info.get('telegram_id', user_id))
         ws1.cell(row=row, column=3, value=info.get('first_name', ''))
         ws1.cell(row=row, column=4, value=info.get('last_name', ''))
         ws1.cell(row=row, column=5, value=info.get('birth_date', ''))
@@ -129,7 +137,7 @@ def generate_excel_report():
     
     ws2 = wb.create_sheet("پرسشنامه")
     
-    survey_headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "نام کسب و کار",
+    survey_headers = ["ردیف", "آیدی تلگرام", "نام", "نام خانوادگی", "نام کسب و کار",
                      "درباره کسب و کار", "محصولات و مزیت", "زیرساخت مجازی", 
                      "تیم", "فروش ماهیانه", "چالش اصلی", "نیاز مشاوره"]
     
@@ -143,7 +151,7 @@ def generate_excel_report():
     for row, (user_id, answers) in enumerate(surveys.items(), 2):
         user_info = users.get(user_id, {})
         ws2.cell(row=row, column=1, value=row-1)
-        ws2.cell(row=row, column=2, value=int(user_id) if user_id.isdigit() else user_id)
+        ws2.cell(row=row, column=2, value=user_info.get('telegram_id', user_id))
         ws2.cell(row=row, column=3, value=user_info.get('first_name', ''))
         ws2.cell(row=row, column=4, value=user_info.get('last_name', ''))
         ws2.cell(row=row, column=5, value=user_info.get('business_name', ''))
@@ -183,11 +191,51 @@ def generate_excel_report():
     wb.save(EXCEL_FILE)
     return EXCEL_FILE
 
-# ==================== منوها ====================
+# ==================== منوهای جدید ====================
+# منوی اصلی با ۶ گزینه جدید
 main_menu = ReplyKeyboardMarkup([
-    [KeyboardButton("🆔 اطلاعات شخصی"), KeyboardButton("🏢 اطلاعات کسب و کار")],
-    [KeyboardButton("📊 پرسشنامه تخصصی"), KeyboardButton("💬 مشاوره هوشمند")],
-    [KeyboardButton("📞 ارتباط با پشتیبانی")]
+    [KeyboardButton("🟢 بازار کار"), KeyboardButton("🔵 کسب‌وکار")],
+    [KeyboardButton("🟣 مسئولیت اجتماعی"), KeyboardButton("🟠 مسیر رشد")],
+    [KeyboardButton("🔴 لیدی لجستیک"), KeyboardButton("🌱 محصولات سیناپس")],
+    [KeyboardButton("📖 راهنمای انتخاب مسیر"), KeyboardButton("🆔 اطلاعات شخصی")],
+    [KeyboardButton("🏢 اطلاعات کسب و کار"), KeyboardButton("📊 پرسشنامه تخصصی")],
+    [KeyboardButton("💬 مشاوره هوشمند"), KeyboardButton("📞 ارتباط با پشتیبانی")]
+], resize_keyboard=True)
+
+# ساب‌منوی بازار کار
+market_menu = ReplyKeyboardMarkup([
+    [KeyboardButton("👤 کارجو"), KeyboardButton("💼 فریلنسر")],
+    [KeyboardButton("🏢 کارفرما")],
+    [KeyboardButton("🔙 بازگشت به منوی اصلی")]
+], resize_keyboard=True)
+
+# ساب‌منوی کسب‌وکار
+business_menu = ReplyKeyboardMarkup([
+    [KeyboardButton("🌟 برند شخصی"), KeyboardButton("🚀 برند محصولی")],
+    [KeyboardButton("🏛️ برند سازمانی")],
+    [KeyboardButton("🔙 بازگشت به منوی اصلی")]
+], resize_keyboard=True)
+
+# ساب‌منوی مسئولیت اجتماعی
+social_menu = ReplyKeyboardMarkup([
+    [KeyboardButton("❤️ نیک‌اندیش داخل ایران"), KeyboardButton("🌍 نیک‌اندیش خارج ایران")],
+    [KeyboardButton("🤝 پروژه اجتماعی")],
+    [KeyboardButton("🔙 بازگشت به منوی اصلی")]
+], resize_keyboard=True)
+
+# ساب‌منوی مسیر رشد
+growth_menu = ReplyKeyboardMarkup([
+    [KeyboardButton("🧠 توسعه فردی"), KeyboardButton("🎯 توسعه شغلی")],
+    [KeyboardButton("📈 توسعه اثر اجتماعی")],
+    [KeyboardButton("🔙 بازگشت به منوی اصلی")]
+], resize_keyboard=True)
+
+# ساب‌منوی لیدی لجستیک
+logistics_menu = ReplyKeyboardMarkup([
+    [KeyboardButton("💰 استعلام قیمت"), KeyboardButton("🌍 تأمین‌کننده خارجی")],
+    [KeyboardButton("📦 حمل و اسناد"), KeyboardButton("📈 فروش و بازاریابی")],
+    [KeyboardButton("🎓 آموزش واردات"), KeyboardButton("🧭 مشاوره تخصصی")],
+    [KeyboardButton("🔙 بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
 back_menu = ReplyKeyboardMarkup([
@@ -248,16 +296,16 @@ async def notify_admin(context, user_id, info, section_type="personal"):
     try:
         if section_type == "personal":
             message = f"🆕 **کاربر جدید ثبت‌نام کرد!**\n\n"
+            message += f"🆔 آیدی تلگرام: `{user_id}`\n"
             message += f"👤 نام: {info.get('first_name', '')} {info.get('last_name', '')}\n"
             message += f"🏙️ شهر: {info.get('city', '')}\n"
-            message += f"📞 شماره: {info.get('phone', '')}\n"
-            message += f"🆔 آیدی: `{user_id}`"
+            message += f"📞 شماره: {info.get('phone', '')}"
         else:
             message = f"🏢 **اطلاعات کسب و کار جدید!**\n\n"
+            message += f"🆔 آیدی تلگرام: `{user_id}`\n"
             message += f"👤 کاربر: {info.get('first_name', '')} {info.get('last_name', '')}\n"
             message += f"🏢 نام کسب و کار: {info.get('business_name', '')}\n"
-            message += f"📍 آدرس: {info.get('address', '')}\n"
-            message += f"🆔 آیدی: `{user_id}`"
+            message += f"📍 آدرس: {info.get('address', '')}"
         
         await context.bot.send_message(chat_id=ADMIN_ID, text=message, parse_mode='Markdown')
     except Exception as e:
@@ -266,21 +314,52 @@ async def notify_admin(context, user_id, info, section_type="personal"):
 # ==================== دستور start ====================
 async def start(update: Update, context):
     user_id = update.effective_user.id
-    user_info = get_user_info(user_id)
     
+    # بررسی عضویت در کانال
+    if not is_member_of_channel(user_id, context):
+        await update.message.reply_text(
+            f"⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**\n\n"
+            f"📢 لطفاً ابتدا در کانال [{CHANNEL_ID}](https://t.me/{CHANNEL_ID[1:]}) عضو شوید.\n\n"
+            f"✅ سپس دوباره روی /start کلیک کنید.",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
+    user_info = get_user_info(user_id)
     logger.info(f"کاربر {user_id} وارد شد")
     
     if is_user_registered(user_id):
         welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
 
-از منوی زیر گزینه مورد نظر خود را انتخاب کنید 👇"""
+به سیناپس خوش اومدی. 🌱😍
+هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
+
+🟢 بازار کار
+🔵 کسب‌وکار
+🟣 مسئولیت اجتماعی
+🟠 مسیر رشد
+🔴 لیدی لجستیک
+🌱 محصولات سیناپس
+
+لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
     else:
         welcome_msg = """سلام سلام
 شهبازی هستم، مریم 😍🌱
 اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
 با من همراه باش
 
-از منوی زیر گزینه مورد نظر خود را انتخاب کنید 👇"""
+به سیناپس خوش اومدی. 🌱😍
+هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
+
+🟢 بازار کار
+🔵 کسب‌وکار
+🟣 مسئولیت اجتماعی
+🟠 مسیر رشد
+🔴 لیدی لجستیک
+🌱 محصولات سیناپس
+
+لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
 
     try:
         with open('images/welcome.jpg', 'rb') as photo:
@@ -321,19 +400,163 @@ async def handle_menu(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # بازگشت به منوی اصلی
+    # بررسی عضویت در کانال
+    if not is_member_of_channel(user_id, context):
+        await update.message.reply_text(
+            f"⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**\n\n"
+            f"📢 لطفاً ابتدا در کانال [{CHANNEL_ID}](https://t.me/{CHANNEL_ID[1:]}) عضو شوید.\n\n"
+            f"✅ سپس دوباره روی /start کلیک کنید.",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
+    # ========== راهنمای انتخاب مسیر ==========
+    if text == "📖 راهنمای انتخاب مسیر":
+        guide_text = """📖 **راهنمای انتخاب مسیر**
+
+به سیناپس خوش اومدی. 🌱
+
+🟢 **بازار کار**
+اگر به دنبال شغل، پروژه یا درآمد یا جذب نیرو هستی.
+
+🔵 **کسب‌وکار**
+اگر می‌خواهی کسب‌وکارت را رشد بدهی یا مسئله‌ای را حل کنی.
+
+🟣 **مسئولیت اجتماعی**
+اگر می‌خواهی در کنار رشد خودت، اثری مثبت بر جامعه بگذاری.
+
+🟠 **مسیر رشد**
+اگر به دنبال خودشناسی و طراحی مسیر زندگی و شغلی هستی.
+
+🔴 **لیدی لجستیک**
+اگر می‌خواهی با فرصت‌ها و خدمات اکوسیستم لیدی لجستیک همراه شوی.
+
+🌱 **محصولات سیناپس**
+اگر می‌خواهی از ابزارها، دوره‌ها و خدمات سیناپس استفاده کنی.
+
+مسیر موردنظرت را انتخاب کن. 👇"""
+        
+        await update.message.reply_text(guide_text, reply_markup=main_menu, parse_mode='Markdown')
+        return
+    
+    # ========== بازار کار ==========
+    if text == "🟢 بازار کار":
+        await update.message.reply_text(
+            "🟢 **بازار کار**\n\n"
+            "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=market_menu
+        )
+        return
+    
+    if text in ["👤 کارجو", "💼 فریلنسر", "🏢 کارفرما"]:
+        await update.message.reply_text(
+            f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
+            f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
+            f"برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=market_menu
+        )
+        return
+    
+    # ========== کسب‌وکار ==========
+    if text == "🔵 کسب‌وکار":
+        await update.message.reply_text(
+            "🔵 **کسب‌وکار**\n\n"
+            "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=business_menu
+        )
+        return
+    
+    if text in ["🌟 برند شخصی", "🚀 برند محصولی", "🏛️ برند سازمانی"]:
+        await update.message.reply_text(
+            f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
+            f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
+            f"برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=business_menu
+        )
+        return
+    
+    # ========== مسئولیت اجتماعی ==========
+    if text == "🟣 مسئولیت اجتماعی":
+        await update.message.reply_text(
+            "🟣 **مسئولیت اجتماعی**\n\n"
+            "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=social_menu
+        )
+        return
+    
+    if text in ["❤️ نیک‌اندیش داخل ایران", "🌍 نیک‌اندیش خارج ایران", "🤝 پروژه اجتماعی"]:
+        await update.message.reply_text(
+            f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
+            f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
+            f"برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=social_menu
+        )
+        return
+    
+    # ========== مسیر رشد ==========
+    if text == "🟠 مسیر رشد":
+        await update.message.reply_text(
+            "🟠 **مسیر رشد**\n\n"
+            "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=growth_menu
+        )
+        return
+    
+    if text in ["🧠 توسعه فردی", "🎯 توسعه شغلی", "📈 توسعه اثر اجتماعی"]:
+        await update.message.reply_text(
+            f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
+            f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
+            f"برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=growth_menu
+        )
+        return
+    
+    # ========== لیدی لجستیک ==========
+    if text == "🔴 لیدی لجستیک":
+        await update.message.reply_text(
+            "🔴 **لیدی لجستیک**\n\n"
+            "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=logistics_menu
+        )
+        return
+    
+    if text in ["💰 استعلام قیمت", "🌍 تأمین‌کننده خارجی", "📦 حمل و اسناد", 
+                "📈 فروش و بازاریابی", "🎓 آموزش واردات", "🧭 مشاوره تخصصی"]:
+        await update.message.reply_text(
+            f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
+            f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
+            f"برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=logistics_menu
+        )
+        return
+    
+    # ========== محصولات سیناپس ==========
+    if text == "🌱 محصولات سیناپس":
+        await update.message.reply_text(
+            "🌱 **محصولات سیناپس**\n\n"
+            "به زودی ابزارها، دوره‌ها و خدمات سیناپس در این بخش قرار می‌گیرند.\n"
+            "برای بازگشت به منوی اصلی، روی دکمه زیر کلیک کنید.",
+            reply_markup=main_menu
+        )
+        return
+    
+    # ========== بازگشت به منوی اصلی ==========
     if text == "🔙 بازگشت به منوی اصلی":
         clear_user_state(user_id)
-        await update.message.reply_text("🔹 به منوی اصلی بازگشتید 👇", reply_markup=main_menu)
+        await update.message.reply_text(
+            "🔹 به منوی اصلی بازگشتید 👇",
+            reply_markup=main_menu
+        )
         return
     
     # ========== اطلاعات شخصی ==========
     if text == "🆔 اطلاعات شخصی":
-        # اگر ثبت‌نام کرده، اجازه ویرایش بده
         if is_user_registered(user_id):
             user_info = get_user_info(user_id)
             await update.message.reply_text(
                 f"✅ **شما قبلاً ثبت‌نام کرده‌اید!**\n\n"
+                f"🆔 آیدی تلگرام: `{user_id}`\n"
                 f"👤 نام: {user_info.get('first_name', '')} {user_info.get('last_name', '')}\n"
                 f"🏙️ شهر: {user_info.get('city', '')}\n"
                 f"📞 شماره: {user_info.get('phone', '')}\n\n"
@@ -348,7 +571,6 @@ async def handle_menu(update: Update, context):
             )
             return
         
-        # ثبت‌نام جدید
         clear_user_state(user_id)
         set_user_state(user_id, "personal", 0, {})
         await update.message.reply_text(
@@ -580,7 +802,7 @@ async def handle_menu(update: Update, context):
                 reply_markup=back_menu
             )
 
-# ==================== دکمه‌های اینلاین (اصلاح شده) ====================
+# ==================== دکمه‌های اینلاین ====================
 async def handle_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -595,33 +817,27 @@ async def handle_callback(update: Update, context):
     
     if data == "confirm":
         try:
-            # ===== ثبت اطلاعات شخصی =====
             if section == "personal_confirm":
                 save_user_info(user_id, temp)
                 await notify_admin(context, user_id, temp, "personal")
                 
-                # حذف دکمه‌های اینلاین از پیام قبلی
                 await query.edit_message_reply_markup(reply_markup=None)
                 
-                # ارسال پیام موفقیت با منوی اصلی
                 await query.message.reply_text(
                     f"✅ **ثبت‌نام با موفقیت انجام شد!** 🎉\n\n"
+                    f"🆔 آیدی تلگرام: `{user_id}`\n"
                     f"👤 نام: {temp.get('first_name', '')} {temp.get('last_name', '')}\n"
                     f"🏙️ شهر: {temp.get('city', '')}\n"
                     f"📞 شماره تماس: {temp.get('phone', '')}\n\n"
                     f"📌 اطلاعات شما در سیستم ثبت شد.\n"
-                    f"حالا می‌توانید:\n"
-                    f"• اطلاعات کسب و کار خود را ثبت کنید\n"
-                    f"• پرسشنامه تخصصی را پر کنید\n"
-                    f"• از مشاوره هوشمند استفاده کنید\n\n"
-                    f"به منوی اصلی بازگشتید 👇",
+                    f"به سیناپس خوش اومدی! 🌱😍\n\n"
+                    f"از منوی زیر مسیر موردنظرت را انتخاب کن 👇",
                     reply_markup=main_menu,
                     parse_mode='Markdown'
                 )
                 clear_user_state(user_id)
                 return
             
-            # ===== ثبت اطلاعات کسب و کار =====
             elif section == "business_confirm":
                 user_info = get_user_info(user_id)
                 temp.update(user_info)
@@ -646,7 +862,6 @@ async def handle_callback(update: Update, context):
                 return
             
             else:
-                # اگر حالت ناشناخته بود
                 await query.edit_message_reply_markup(reply_markup=None)
                 await query.message.reply_text(
                     "⚠️ خطا در ثبت اطلاعات. لطفاً دوباره تلاش کنید.",
@@ -665,7 +880,6 @@ async def handle_callback(update: Update, context):
             clear_user_state(user_id)
     
     elif data == "edit":
-        # اصلاح: بخش رو از حالت confirm خارج کن
         if section == "personal_confirm":
             new_section = "personal"
             questions = personal_info_questions
@@ -675,7 +889,6 @@ async def handle_callback(update: Update, context):
             questions = business_info_questions
             title = "✏️ ویرایش اطلاعات کسب و کار"
         else:
-            # اگر حالت دیگه‌ای بود
             await query.edit_message_text(
                 "⚠️ خطا در ویرایش. لطفاً دوباره تلاش کنید.",
                 reply_markup=main_menu
@@ -683,13 +896,8 @@ async def handle_callback(update: Update, context):
             clear_user_state(user_id)
             return
         
-        # حذف دکمه‌های اینلاین از پیام قبلی
         await query.edit_message_reply_markup(reply_markup=None)
-        
-        # تنظیم حالت جدید
         set_user_state(user_id, new_section, 0, {})
-        
-        # ارسال سوال اول
         await query.message.reply_text(
             f"{title}\n\n{questions[0][1]}",
             reply_markup=back_menu,
@@ -698,9 +906,7 @@ async def handle_callback(update: Update, context):
     
     elif data == "cancel":
         clear_user_state(user_id)
-        
         await query.edit_message_reply_markup(reply_markup=None)
-        
         await query.message.reply_text(
             "❌ **ثبت‌نامه لغو شد.**\n\n"
             "اطلاعات شما ذخیره نشد.\n"
@@ -810,7 +1016,8 @@ app.add_handler(CommandHandler("broadcast", broadcast))
 app.add_handler(CallbackQueryHandler(handle_callback))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-print("🤖 بات نسخه پریمیوم با خروجی اکسل روشن شد...")
+print("🤖 بات سیناپس با قابلیت‌های جدید روشن شد...")
+print(f"📢 کانال اجباری: {CHANNEL_ID}")
 print("📁 اطلاعات در فایل‌های JSON ذخیره می‌شوند")
 print(f"👑 ادمین: {ADMIN_ID}")
 print("📊 دستور /getexcel برای دریافت فایل اکسل")
