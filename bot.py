@@ -6,6 +6,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from telegram.error import TelegramError, BadRequest, Forbidden, ChatMigrated
 from groq import Groq
 
 # ==================== تنظیمات لاگینگ ====================
@@ -21,7 +22,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = 8065571732  # 🔴 این رو با ایدی خودت عوض کن!
 CHANNEL_ID = "@synapdse_os"  # آیدی کانال
 
-client = Groq(api_key=GROQ_API_KEY)
+try:
+    client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+except Exception as e:
+    logger.error(f"خطا در راه‌اندازی Groq: {e}")
+    client = None
 
 # فایل‌های JSON
 USERS_FILE = "users.json"
@@ -100,79 +105,72 @@ def has_completed_assessment(user_id):
     assessments = read_json(ASSESSMENT_FILE, {})
     return str(user_id) in assessments and len(assessments[str(user_id)]) > 5
 
-# ==================== توابع بررسی عضویت (اصلاح شده) ====================
+# ==================== توابع بررسی عضویت ====================
 async def is_member_of_channel(user_id, context):
     """بررسی عضویت کاربر در کانال با روش مطمئن"""
     try:
-        # تلاش برای دریافت اطلاعات عضویت
         chat_member = await context.bot.get_chat_member(
-            chat_id=CHANNEL_ID, 
+            chat_id=CHANNEL_ID,
             user_id=user_id
         )
-        
-        # وضعیت‌های معتبر برای عضویت
         valid_statuses = ['member', 'administrator', 'creator']
-        
-        if chat_member.status in valid_statuses:
-            logger.info(f"✅ کاربر {user_id} عضو کانال است (وضعیت: {chat_member.status})")
-            return True
-        else:
-            logger.info(f"❌ کاربر {user_id} عضو کانال نیست (وضعیت: {chat_member.status})")
-            return False
-            
-    except Exception as e:
+        is_member = chat_member.status in valid_statuses
+        logger.info(f"{'✅' if is_member else '❌'} کاربر {user_id} - وضعیت کانال: {chat_member.status}")
+        return is_member
+
+    except Forbidden as e:
+        # بات ادمین کانال نیست یا دسترسی ندارد
+        logger.warning(f"⛔ بات به کانال دسترسی ندارد (کاربر {user_id}): {e}")
+        # اگر بات ادمین کانال نباشد، فرض می‌کنیم کاربر عضو است تا ربات کار کند
+        return True
+
+    except BadRequest as e:
         error_msg = str(e).lower()
-        logger.error(f"⚠️ خطا در بررسی عضویت کاربر {user_id}: {e}")
-        
-        # اگر کاربر پیدا نشد یا خطای دیگر، فرض میکنیم عضو نیست
-        if "user not found" in error_msg or "chat not found" in error_msg:
+        logger.error(f"❌ درخواست نامعتبر (کاربر {user_id}): {e}")
+        if "user not found" in error_msg:
             return False
-        
-        # برای سایر خطاها هم false برمیگردونیم
+        if "chat not found" in error_msg:
+            logger.error(f"⚠️ کانال {CHANNEL_ID} پیدا نشد! آیدی کانال را بررسی کنید.")
+            return True  # اگر کانال پیدا نشد، بات را بلاک نکنیم
         return False
 
-async def check_and_handle_membership(update: Update, context, callback=None):
-    """بررسی عضویت و مدیریت پیام‌ها"""
-    user_id = update.effective_user.id
-    
-    # بررسی عضویت
-    is_member = await is_member_of_channel(user_id, context)
-    
-    if not is_member:
-        # کاربر عضو نیست - پیام عضویت ارسال کن
-        join_button = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
-        ])
-        
-        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+    except TelegramError as e:
+        logger.error(f"⚠️ خطای تلگرام (کاربر {user_id}): {e}")
+        return False
 
-📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
+    except Exception as e:
+        logger.error(f"⚠️ خطای ناشناخته در بررسی عضویت (کاربر {user_id}): {e}")
+        return False
 
-🆔 **آیدی کانال:** {CHANNEL_ID}
 
-✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
+async def send_join_message(update: Update, context=None):
+    """ارسال پیام الزام به عضویت با دکمه بررسی"""
+    channel_url = f"https://t.me/{CHANNEL_ID.lstrip('@')}"
+    join_button = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=channel_url)],
+        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+    ])
 
----
+    message = (
+        "⚠️ برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!\n\n"
+        "📢 لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.\n\n"
+        f"🆔 آیدی کانال: {CHANNEL_ID}\n\n"
+        "✅ بعد از عضویت، روی دکمه «بررسی عضویت» کلیک کنید.\n\n"
+        "💡 نکته: اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."
+    )
 
-💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
-
+    if update.message:
         await update.message.reply_text(
             message,
             reply_markup=join_button,
-            parse_mode='Markdown',
             disable_web_page_preview=True
         )
-        return False
-    
-    # کاربر عضو است
-    logger.info(f"✅ کاربر {user_id} عضو کانال است - ادامه فرآیند")
-    
-    # اگر تابع callback وجود داشت، آن را اجرا کن
-    if callback:
-        await callback(update, context)
-    
-    return True
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            message,
+            reply_markup=join_button,
+            disable_web_page_preview=True
+        )
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
@@ -455,124 +453,109 @@ async def notify_admin(context, user_id, info, section_type="personal"):
     except Exception as e:
         logger.error(f"خطا در ارسال نوتیفیکیشن: {e}")
 
-# ==================== تابع نمایش خوش‌آمدگویی ====================
-async def show_welcome_message(update: Update, context):
-    """نمایش پیام خوش‌آمدگویی بعد از تایید عضویت"""
-    user_id = update.effective_user.id
-    user_info = get_user_info(user_id)
-    
-    if is_user_registered(user_id):
-        welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
-
-به سیناپس خوش اومدی. 🌱😍
-هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
-
-🟢 بازار کار
-🔵 کسب‌وکار
-🟣 مسئولیت اجتماعی
-🟠 مسیر رشد
-🔴 لیدی لجستیک
-🌱 محصولات سیناپس
-
-لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
-    else:
-        welcome_msg = """سلام سلام
-شهبازی هستم، مریم 😍🌱
-اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
-با من همراه باش
-
-به سیناپس خوش اومدی. 🌱😍
-هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
-
-🟢 بازار کار
-🔵 کسب‌وکار
-🟣 مسئولیت اجتماعی
-🟠 مسیر رشد
-🔴 لیدی لجستیک
-🌱 محصولات سیناپس
-
-لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
-    
-    try:
-        with open('images/welcome.jpg', 'rb') as photo:
-            await update.message.reply_photo(
-                photo=photo,
-                caption=welcome_msg,
-                reply_markup=main_menu
-            )
-    except:
-        await update.message.reply_text(welcome_msg, reply_markup=main_menu)
-
-# ==================== دستور start (اصلاح شده) ====================
+# ==================== دستور start ====================
 async def start(update: Update, context):
     user_id = update.effective_user.id
+    logger.info(f"📩 دستور /start از کاربر {user_id}")
+
+    try:
+        # بررسی عضویت در کانال
+        is_member = await is_member_of_channel(user_id, context)
+
+        if not is_member:
+            await send_join_message(update, context)
+            return
+
+        # اگر عضو هست، ادامه بده
+        user_info = get_user_info(user_id)
+        logger.info(f"✅ کاربر {user_id} وارد شد - عضو کانال")
+
+        if is_user_registered(user_id):
+            welcome_msg = (
+                f"✨ خوش برگشتی {user_info.get('first_name', '')} عزیز!\n\n"
+                "به سیناپس خوش اومدی. 🌱😍\n"
+                "هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. "
+                "تو از کجا میخوای شروع کنی؟\n\n"
+                "🟢 بازار کار\n"
+                "🔵 کسب‌وکار\n"
+                "🟣 مسئولیت اجتماعی\n"
+                "🟠 مسیر رشد\n"
+                "🔴 لیدی لجستیک\n"
+                "🌱 محصولات سیناپس\n\n"
+                "لطفاً مسیر موردنظرت را انتخاب کن. 👇"
+            )
+        else:
+            welcome_msg = (
+                "سلام سلام\n"
+                "شهبازی هستم، مریم 😍🌱\n"
+                "اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین.\n"
+                "با من همراه باش\n\n"
+                "به سیناپس خوش اومدی. 🌱😍\n"
+                "هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. "
+                "تو از کجا میخوای شروع کنی؟\n\n"
+                "🟢 بازار کار\n"
+                "🔵 کسب‌وکار\n"
+                "🟣 مسئولیت اجتماعی\n"
+                "🟠 مسیر رشد\n"
+                "🔴 لیدی لجستیک\n"
+                "🌱 محصولات سیناپس\n\n"
+                "لطفاً مسیر موردنظرت را انتخاب کن. 👇"
+            )
+
+        try:
+            with open('images/welcome.jpg', 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=welcome_msg,
+                    reply_markup=main_menu
+                )
+        except Exception:
+            await update.message.reply_text(welcome_msg, reply_markup=main_menu)
+
+    except Exception as e:
+        logger.error(f"❌ خطا در هندلر start برای کاربر {user_id}: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                "⚠️ خطایی رخ داد. لطفاً دوباره /start را بزنید.",
+                reply_markup=main_menu
+            )
+        except Exception:
+            pass
+
+# ==================== تابع نمایش خلاصه ====================
+def get_info_summary(info, section_type):
+    if section_type == "personal":
+        return f"""📝 **خلاصه اطلاعات شخصی شما:**
+
+👤 نام: {info.get('first_name', '❌')}
+👨‍👩‍👧 نام خانوادگی: {info.get('last_name', '❌')}
+📅 تاریخ تولد: {info.get('birth_date', '❌')}
+📞 شماره تماس: {info.get('phone', '❌')}
+🏙️ شهر: {info.get('city', '❌')}
+
+آیا اطلاعات صحیح است؟"""
     
-    # بررسی عضویت در کانال
-    is_member = await is_member_of_channel(user_id, context)
+    elif section_type == "business":
+        return f"""🏢 **خلاصه اطلاعات کسب و کار شما:**
+
+نام کسب و کار: {info.get('business_name', '❌')}
+📍 آدرس: {info.get('address', '❌')}
+📢 راه معرفی: {info.get('referral_source', '❌')}
+
+آیا اطلاعات صحیح است؟"""
     
-    if not is_member:
-        # کاربر عضو نیست - نمایش پیام عضویت
-        join_button = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
-        ])
-        
-        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+    return ""
 
-📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
-
-🆔 **آیدی کانال:** {CHANNEL_ID}
-
-✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
-
----
-
-💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
-
-        await update.message.reply_text(
-            message,
-            reply_markup=join_button,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-        return
-    
-    # کاربر عضو است - نمایش پیام خوش‌آمدگویی
-    await show_welcome_message(update, context)
-
-# ==================== پردازش منو (اصلاح شده) ====================
+# ==================== پردازش منو ====================
 async def handle_menu(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # بررسی عضویت در کانال برای همه پیام‌ها
+    # ========== بررسی عضویت در کانال ==========
     is_member = await is_member_of_channel(user_id, context)
     
     if not is_member:
-        # کاربر عضو نیست - نمایش پیام عضویت
-        join_button = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
-        ])
-        
-        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
-
-📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
-
-🆔 **آیدی کانال:** {CHANNEL_ID}
-
-✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
-
----
-
-💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
-
-        await update.message.reply_text(
-            message,
-            reply_markup=join_button,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+        await send_join_message(update, context)
         return
     
     # ========== راهنمای انتخاب مسیر ==========
@@ -1068,7 +1051,14 @@ async def handle_menu(update: Update, context):
                 reply_markup=main_menu
             )
             return
-        
+
+        if client is None:
+            await update.message.reply_text(
+                "⚠️ سرویس مشاوره هوشمند در حال حاضر در دسترس نیست.",
+                reply_markup=back_menu
+            )
+            return
+
         user_info = get_user_info(user_id)
         try:
             response = client.chat.completions.create(
@@ -1094,31 +1084,7 @@ async def handle_menu(update: Update, context):
                 reply_markup=back_menu
             )
 
-# ==================== تابع خلاصه اطلاعات ====================
-def get_info_summary(info, section_type):
-    if section_type == "personal":
-        return f"""📝 **خلاصه اطلاعات شخصی شما:**
-
-👤 نام: {info.get('first_name', '❌')}
-👨‍👩‍👧 نام خانوادگی: {info.get('last_name', '❌')}
-📅 تاریخ تولد: {info.get('birth_date', '❌')}
-📞 شماره تماس: {info.get('phone', '❌')}
-🏙️ شهر: {info.get('city', '❌')}
-
-آیا اطلاعات صحیح است؟"""
-    
-    elif section_type == "business":
-        return f"""🏢 **خلاصه اطلاعات کسب و کار شما:**
-
-نام کسب و کار: {info.get('business_name', '❌')}
-📍 آدرس: {info.get('address', '❌')}
-📢 راه معرفی: {info.get('referral_source', '❌')}
-
-آیا اطلاعات صحیح است؟"""
-    
-    return ""
-
-# ==================== دکمه‌های اینلاین (اصلاح شده) ====================
+# ==================== دکمه‌های اینلاین ====================
 async def handle_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -1129,65 +1095,83 @@ async def handle_callback(update: Update, context):
     # ===== بررسی عضویت =====
     if data == "check_membership":
         is_member = await is_member_of_channel(user_id, context)
-        
+
         if is_member:
-            # حذف دکمه‌ها
-            await query.edit_message_reply_markup(reply_markup=None)
-            
-            # نمایش پیام خوش‌آمدگویی
+            # پیام قبلی را حذف کن
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
             user_info = get_user_info(user_id)
-            
+
             if is_user_registered(user_id):
-                welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
-
-به سیناپس خوش اومدی. 🌱😍
-هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
-
-🟢 بازار کار
-🔵 کسب‌وکار
-🟣 مسئولیت اجتماعی
-🟠 مسیر رشد
-🔴 لیدی لجستیک
-🌱 محصولات سیناپس
-
-لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
+                welcome_msg = (
+                    f"✨ خوش برگشتی {user_info.get('first_name', '')} عزیز!\n\n"
+                    "به سیناپس خوش اومدی. 🌱😍\n"
+                    "هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. "
+                    "تو از کجا میخوای شروع کنی؟\n\n"
+                    "🟢 بازار کار\n"
+                    "🔵 کسب‌وکار\n"
+                    "🟣 مسئولیت اجتماعی\n"
+                    "🟠 مسیر رشد\n"
+                    "🔴 لیدی لجستیک\n"
+                    "🌱 محصولات سیناپس\n\n"
+                    "لطفاً مسیر موردنظرت را انتخاب کن. 👇"
+                )
             else:
-                welcome_msg = """سلام سلام
-شهبازی هستم، مریم 😍🌱
-اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
-با من همراه باش
+                welcome_msg = (
+                    "سلام سلام\n"
+                    "شهبازی هستم، مریم 😍🌱\n"
+                    "اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین.\n"
+                    "با من همراه باش\n\n"
+                    "به سیناپس خوش اومدی. 🌱😍\n"
+                    "هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. "
+                    "تو از کجا میخوای شروع کنی؟\n\n"
+                    "🟢 بازار کار\n"
+                    "🔵 کسب‌وکار\n"
+                    "🟣 مسئولیت اجتماعی\n"
+                    "🟠 مسیر رشد\n"
+                    "🔴 لیدی لجستیک\n"
+                    "🌱 محصولات سیناپس\n\n"
+                    "لطفاً مسیر موردنظرت را انتخاب کن. 👇"
+                )
 
-به سیناپس خوش اومدی. 🌱😍
-هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
+            # ارسال عکس خوش‌آمدگویی یا پیام متنی
+            try:
+                with open('images/welcome.jpg', 'rb') as photo:
+                    await query.message.reply_photo(
+                        photo=photo,
+                        caption=welcome_msg,
+                        reply_markup=main_menu
+                    )
+            except Exception:
+                await query.message.reply_text(
+                    welcome_msg,
+                    reply_markup=main_menu
+                )
 
-🟢 بازار کار
-🔵 کسب‌وکار
-🟣 مسئولیت اجتماعی
-🟠 مسیر رشد
-🔴 لیدی لجستیک
-🌱 محصولات سیناپس
-
-لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
-
-            await query.message.reply_text(
-                welcome_msg,
-                reply_markup=main_menu,
-                parse_mode='Markdown'
-            )
         else:
-            # کاربر هنوز عضو نشده
+            channel_url = f"https://t.me/{CHANNEL_ID.lstrip('@')}"
             join_button = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+                [InlineKeyboardButton("📢 عضویت در کانال", url=channel_url)],
                 [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")]
             ])
-            
-            await query.edit_message_text(
-                f"❌ **هنوز عضو کانال نشده‌اید!**\n\n"
-                f"📢 لطفاً ابتدا در کانال {CHANNEL_ID} عضو شوید.\n"
-                f"✅ سپس روی دکمه 'بررسی مجدد' کلیک کنید.",
-                reply_markup=join_button,
-                parse_mode='Markdown'
-            )
+
+            try:
+                await query.edit_message_text(
+                    f"❌ هنوز عضو کانال نشده‌اید!\n\n"
+                    f"📢 لطفاً ابتدا در کانال {CHANNEL_ID} عضو شوید.\n"
+                    f"✅ سپس روی دکمه «بررسی مجدد» کلیک کنید.",
+                    reply_markup=join_button
+                )
+            except Exception:
+                await query.message.reply_text(
+                    f"❌ هنوز عضو کانال نشده‌اید!\n\n"
+                    f"📢 لطفاً ابتدا در کانال {CHANNEL_ID} عضو شوید.\n"
+                    f"✅ سپس روی دکمه «بررسی مجدد» کلیک کنید.",
+                    reply_markup=join_button
+                )
         return
     
     # ===== بقیه کدهای قبلی =====
@@ -1394,8 +1378,22 @@ async def broadcast(update: Update, context):
     await update.message.reply_text(f"✅ پیام به {success} کاربر ارسال شد.")
 
 # ==================== اجرا ====================
+import traceback
+
+async def error_handler(update, context):
+    """هندلر سراسری خطا"""
+    logger.error(f"❌ خطای سراسری: {context.error}", exc_info=context.error)
+    if update and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ خطایی رخ داد. لطفاً دوباره تلاش کنید یا /start را بزنید."
+            )
+        except Exception:
+            pass
+
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+app.add_error_handler(error_handler)
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("getexcel", get_excel))
 app.add_handler(CommandHandler("getdata", get_data))
