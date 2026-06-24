@@ -80,15 +80,14 @@ def delete_user_info(user_id):
         return True
     return False
 
-# ==================== خروجی اکسل حرفه‌ای ====================
+# ==================== خروجی اکسل ====================
 def generate_excel_report():
-    """ایجاد فایل اکسل با فرمت حرفه‌ای"""
     users = read_json(USERS_FILE, {})
     surveys = read_json(SURVEY_FILE, {})
     
     wb = openpyxl.Workbook()
     
-    # ========== شیت ۱: اطلاعات کاربران ==========
+    # شیت ۱: اطلاعات کاربران
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
@@ -124,7 +123,7 @@ def generate_excel_report():
     for col in range(1, len(headers)+1):
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    # ========== شیت ۲: پرسشنامه ==========
+    # شیت ۲: پرسشنامه
     ws2 = wb.create_sheet("پرسشنامه")
     
     survey_headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "نام کسب و کار",
@@ -156,7 +155,7 @@ def generate_excel_report():
     for col in range(1, len(survey_headers)+1):
         ws2.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    # ========== شیت ۳: خلاصه آماری ==========
+    # شیت ۳: خلاصه آماری
     ws3 = wb.create_sheet("خلاصه آمار")
     
     stats_data = [
@@ -322,28 +321,8 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات شخصی ==========
     if text == "🆔 اطلاعات شخصی":
-        # چک کن که کاربر قبلاً ثبت نام کرده یا نه
-        user_info = get_user_info(user_id)
-        if user_info.get("first_name"):
-            await update.message.reply_text(
-                f"✅ شما قبلاً اطلاعات شخصی خود را ثبت کرده‌اید.\n\n"
-                f"👤 نام: {user_info.get('first_name', '')}\n"
-                f"👨‍👩‍👧 نام خانوادگی: {user_info.get('last_name', '')}\n"
-                f"📅 تاریخ تولد: {user_info.get('birth_date', '')}\n"
-                f"📞 شماره تماس: {user_info.get('phone', '')}\n"
-                f"🏙️ شهر: {user_info.get('city', '')}\n\n"
-                f"برای ویرایش، دوباره روی دکمه 'اطلاعات شخصی' کلیک کنید.",
-                reply_markup=main_menu
-            )
-            # شروع مجدد فرآیند برای ویرایش
-            set_user_state(user_id, "personal", 0, {})
-            await update.message.reply_text(
-                f"📝 **ویرایش اطلاعات شخصی**\n\n{personal_info_questions[0][1]}",
-                reply_markup=back_menu,
-                parse_mode='Markdown'
-            )
-            return
-        
+        # پاک کردن وضعیت قبلی برای شروع مجدد
+        clear_user_state(user_id)
         set_user_state(user_id, "personal", 0, {})
         await update.message.reply_text(
             f"📝 **ثبت اطلاعات شخصی**\n\n{personal_info_questions[0][1]}",
@@ -354,24 +333,7 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات کسب و کار ==========
     if text == "🏢 اطلاعات کسب و کار":
-        user_info = get_user_info(user_id)
-        if user_info.get("business_name"):
-            await update.message.reply_text(
-                f"✅ شما قبلاً اطلاعات کسب و کار خود را ثبت کرده‌اید.\n\n"
-                f"🏢 نام کسب و کار: {user_info.get('business_name', '')}\n"
-                f"📍 آدرس: {user_info.get('address', '')}\n"
-                f"📢 راه معرفی: {user_info.get('referral_source', '')}\n\n"
-                f"برای ویرایش، دوباره روی دکمه 'اطلاعات کسب و کار' کلیک کنید.",
-                reply_markup=main_menu
-            )
-            set_user_state(user_id, "business", 0, {})
-            await update.message.reply_text(
-                f"🏢 **ویرایش اطلاعات کسب و کار**\n\n{business_info_questions[0][1]}",
-                reply_markup=back_menu,
-                parse_mode='Markdown'
-            )
-            return
-        
+        clear_user_state(user_id)
         set_user_state(user_id, "business", 0, {})
         await update.message.reply_text(
             f"🏢 **ثبت اطلاعات کسب و کار**\n\n{business_info_questions[0][1]}",
@@ -393,7 +355,6 @@ async def handle_menu(update: Update, context):
             )
             return
         
-        # چک کن که قبلاً پرسشنامه رو پر کرده یا نه
         surveys = read_json(SURVEY_FILE, {})
         if str(user_id) in surveys and len(surveys[str(user_id)]) > 2:
             await update.message.reply_text(
@@ -403,6 +364,7 @@ async def handle_menu(update: Update, context):
             )
             return
         
+        clear_user_state(user_id)
         set_user_state(user_id, "survey", 0, {})
         await update.message.reply_text(
             f"📋 **پرسشنامه تخصصی**\n\n{survey_questions[0][1]}",
@@ -578,10 +540,8 @@ async def handle_callback(update: Update, context):
         if "personal" in section:
             # ذخیره اطلاعات شخصی
             save_user_info(user_id, temp)
-            # ارسال نوتیفیکیشن به ادمین
             await notify_admin(context, user_id, temp)
             
-            # نمایش پیام موفقیت با منوی اصلی
             await query.edit_message_text(
                 f"✅ **ثبت‌نام با موفقیت انجام شد!** 🎉\n\n"
                 f"👤 نام: {temp.get('first_name', '')} {temp.get('last_name', '')}\n"
@@ -598,10 +558,8 @@ async def handle_callback(update: Update, context):
             )
             
         elif "business" in section:
-            # ذخیره اطلاعات کسب و کار
             save_user_info(user_id, temp)
             
-            # نمایش پیام موفقیت با منوی اصلی
             await query.edit_message_text(
                 f"✅ **اطلاعات کسب و کار شما ثبت شد!** 🏢\n\n"
                 f"🏢 نام کسب و کار: {temp.get('business_name', '')}\n"
@@ -615,7 +573,6 @@ async def handle_callback(update: Update, context):
                 parse_mode='Markdown'
             )
         
-        # پاک کردن وضعیت کاربر
         clear_user_state(user_id)
     
     elif data == "edit":
@@ -623,7 +580,6 @@ async def handle_callback(update: Update, context):
         section = state["section"].replace("_confirm", "")
         set_user_state(user_id, section, 0, {})
         
-        # انتخاب سوالات مناسب
         if section == "personal":
             questions = personal_info_questions
             title = "✏️ ویرایش اطلاعات شخصی"
@@ -638,14 +594,8 @@ async def handle_callback(update: Update, context):
         )
     
     elif data == "cancel":
-        # انصراف و حذف اطلاعات موقت
         section = state["section"]
         clear_user_state(user_id)
-        
-        # حذف اطلاعات از دیتابیس (اگر قبلاً ذخیره شده بود)
-        user_info = get_user_info(user_id)
-        if user_info.get("first_name") and "personal" in section:
-            delete_user_info(user_id)
         
         await query.edit_message_text(
             "❌ **ثبت‌نامه لغو شد.**\n\n"
@@ -658,7 +608,6 @@ async def handle_callback(update: Update, context):
 
 # ==================== دستورات ادمین ====================
 async def get_excel(update: Update, context):
-    """دریافت فایل اکسل (فقط ادمین)"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔ دسترسی ندارید!")
         return
