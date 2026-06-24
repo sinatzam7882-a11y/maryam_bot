@@ -58,7 +58,7 @@ def save_user_info(user_id, info):
     users[str(user_id)].update(info)
     users[str(user_id)]["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_json(USERS_FILE, users)
-    logger.info(f"اطلاعات کاربر {user_id} ذخیره شد")
+    logger.info(f"✅ اطلاعات کاربر {user_id} ذخیره شد")
 
 def save_survey_answer(user_id, section, answer):
     surveys = read_json(SURVEY_FILE, {})
@@ -73,7 +73,6 @@ def get_user_info(user_id):
     return users.get(str(user_id), {})
 
 def is_user_registered(user_id):
-    """بررسی اینکه کاربر قبلاً ثبت‌نام کرده یا نه"""
     users = read_json(USERS_FILE, {})
     return str(user_id) in users and users[str(user_id)].get("first_name") is not None
 
@@ -84,7 +83,6 @@ def generate_excel_report():
     
     wb = openpyxl.Workbook()
     
-    # شیت ۱: اطلاعات کاربران
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
@@ -120,7 +118,6 @@ def generate_excel_report():
     for col in range(1, len(headers)+1):
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    # شیت ۲: پرسشنامه
     ws2 = wb.create_sheet("پرسشنامه")
     
     survey_headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "نام کسب و کار",
@@ -152,7 +149,6 @@ def generate_excel_report():
     for col in range(1, len(survey_headers)+1):
         ws2.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    # شیت ۳: خلاصه آماری
     ws3 = wb.create_sheet("خلاصه آمار")
     
     stats_data = [
@@ -324,7 +320,6 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات شخصی ==========
     if text == "🆔 اطلاعات شخصی":
-        # چک کن کاربر قبلاً ثبت‌نام کرده یا نه
         if is_user_registered(user_id):
             user_info = get_user_info(user_id)
             await update.message.reply_text(
@@ -332,12 +327,19 @@ async def handle_menu(update: Update, context):
                 f"👤 نام: {user_info.get('first_name', '')} {user_info.get('last_name', '')}\n"
                 f"🏙️ شهر: {user_info.get('city', '')}\n"
                 f"📞 شماره: {user_info.get('phone', '')}\n\n"
-                f"برای ویرایش اطلاعات، روی دکمه زیر کلیک کنید 👇",
+                f"برای ویرایش اطلاعات، دوباره روی دکمه 'اطلاعات شخصی' کلیک کنید.",
                 reply_markup=main_menu
+            )
+            # شروع مجدد برای ویرایش
+            clear_user_state(user_id)
+            set_user_state(user_id, "personal", 0, {})
+            await update.message.reply_text(
+                f"📝 **ویرایش اطلاعات شخصی**\n\n{personal_info_questions[0][1]}",
+                reply_markup=back_menu,
+                parse_mode='Markdown'
             )
             return
         
-        # شروع ثبت‌نام جدید
         clear_user_state(user_id)
         set_user_state(user_id, "personal", 0, {})
         await update.message.reply_text(
@@ -349,7 +351,6 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات کسب و کار ==========
     if text == "🏢 اطلاعات کسب و کار":
-        # چک کن کاربر قبلاً ثبت‌نام کرده یا نه
         if not is_user_registered(user_id):
             await update.message.reply_text(
                 "⚠️ لطفاً ابتدا در بخش '🆔 اطلاعات شخصی' ثبت‌نام کنید.",
@@ -367,9 +368,15 @@ async def handle_menu(update: Update, context):
                 f"برای ویرایش، روی دکمه 'اطلاعات کسب و کار' کلیک کنید.",
                 reply_markup=main_menu
             )
+            clear_user_state(user_id)
+            set_user_state(user_id, "business", 0, {})
+            await update.message.reply_text(
+                f"🏢 **ویرایش اطلاعات کسب و کار**\n\n{business_info_questions[0][1]}",
+                reply_markup=back_menu,
+                parse_mode='Markdown'
+            )
             return
         
-        # شروع ثبت اطلاعات کسب و کار
         clear_user_state(user_id)
         set_user_state(user_id, "business", 0, {})
         await update.message.reply_text(
@@ -574,11 +581,12 @@ async def handle_callback(update: Update, context):
     user_id = query.from_user.id
     data = query.data
     state = get_user_state(user_id)
-    temp = state["temp"]
+    temp = state.get("temp", {})
+    section = state.get("section", "")
+    
+    logger.info(f"کاربر {user_id} روی دکمه {data} کلیک کرد - وضعیت: {state}")
     
     if data == "confirm":
-        section = state["section"]
-        
         if "personal" in section:
             # ذخیره اطلاعات شخصی
             save_user_info(user_id, temp)
@@ -602,7 +610,7 @@ async def handle_callback(update: Update, context):
         elif "business" in section:
             # دریافت اطلاعات کاربر برای ذخیره کامل
             user_info = get_user_info(user_id)
-            temp.update(user_info)  # اطلاعات شخصی رو هم نگه دار
+            temp.update(user_info)
             save_user_info(user_id, temp)
             await notify_admin(context, user_id, temp, "business")
             
@@ -623,7 +631,7 @@ async def handle_callback(update: Update, context):
     
     elif data == "edit":
         # برگرداندن به مرحله اول برای ویرایش
-        section = state["section"].replace("_confirm", "")
+        section = section.replace("_confirm", "")
         set_user_state(user_id, section, 0, {})
         
         if section == "personal":
@@ -640,7 +648,6 @@ async def handle_callback(update: Update, context):
         )
     
     elif data == "cancel":
-        section = state["section"]
         clear_user_state(user_id)
         
         await query.edit_message_text(
