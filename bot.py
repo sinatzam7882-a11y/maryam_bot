@@ -5,6 +5,7 @@ from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatMemberStatus
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from groq import Groq
 
@@ -102,14 +103,19 @@ def has_completed_assessment(user_id):
 
 # ==================== توابع بررسی عضویت ====================
 async def is_member_of_channel(user_id, context):
-    """بررسی عضویت کاربر در کانال با روش مطمئن"""
+    """بررسی عضویت کاربر در کانال با استفاده از وضعیت‌های استاندارد"""
     try:
         chat_member = await context.bot.get_chat_member(
             chat_id=CHANNEL_ID, 
             user_id=user_id
         )
         
-        valid_statuses = ['member', 'administrator', 'creator']
+        valid_statuses = [
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER,
+            "creator" # نسخه پشتیبان برای احتیاط
+        ]
         
         if chat_member.status in valid_statuses:
             logger.info(f"✅ کاربر {user_id} عضو کانال است (وضعیت: {chat_member.status})")
@@ -119,12 +125,7 @@ async def is_member_of_channel(user_id, context):
             return False
             
     except Exception as e:
-        error_msg = str(e).lower()
         logger.error(f"⚠️ خطا در بررسی عضویت کاربر {user_id}: {e}")
-        
-        if "user not found" in error_msg or "chat not found" in error_msg:
-            return False
-        
         return False
 
 async def send_join_message(update: Update):
@@ -146,12 +147,20 @@ async def send_join_message(update: Update):
 
 💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
 
-    await update.message.reply_text(
-        message,
-        reply_markup=join_button,
-        parse_mode='Markdown',
-        disable_web_page_preview=True
-    )
+    if update.message:
+        await update.message.reply_text(
+            message,
+            reply_markup=join_button,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            message,
+            reply_markup=join_button,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
