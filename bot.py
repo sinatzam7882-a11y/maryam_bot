@@ -26,7 +26,7 @@ client = Groq(api_key=GROQ_API_KEY)
 # فایل‌های JSON
 USERS_FILE = "users.json"
 SURVEY_FILE = "survey.json"
-ASSESSMENT_FILE = "assessment.json"  # فایل جدید برای فرم ارزیابی
+ASSESSMENT_FILE = "assessment.json"
 EXCEL_FILE = "users_data.xlsx"
 
 # ==================== اطلاعات پشتیبانی ====================
@@ -65,7 +65,6 @@ def save_user_info(user_id, info):
     return True
 
 def save_assessment(user_id, answers):
-    """ذخیره پاسخ‌های فرم ارزیابی"""
     assessments = read_json(ASSESSMENT_FILE, {})
     if str(user_id) not in assessments:
         assessments[str(user_id)] = {}
@@ -98,20 +97,61 @@ def is_business_registered(user_id):
     return user_data.get("business_name") is not None and user_data.get("business_name") != ""
 
 def has_completed_assessment(user_id):
-    """بررسی اینکه کاربر فرم ارزیابی رو پر کرده یا نه"""
     assessments = read_json(ASSESSMENT_FILE, {})
     return str(user_id) in assessments and len(assessments[str(user_id)]) > 5
 
+# ==================== توابع بررسی عضویت ====================
 async def is_member_of_channel(user_id, context):
-    """بررسی عضویت کاربر در کانال"""
+    """بررسی عضویت کاربر در کانال با روش مطمئن"""
     try:
-        chat_member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        valid_statuses = ['member', 'administrator', 'creator', 'restricted']
+        chat_member = await context.bot.get_chat_member(
+            chat_id=CHANNEL_ID, 
+            user_id=user_id
+        )
+        
+        valid_statuses = ['member', 'administrator', 'creator']
+        
         if chat_member.status in valid_statuses:
+            logger.info(f"✅ کاربر {user_id} عضو کانال است (وضعیت: {chat_member.status})")
             return True
+        else:
+            logger.info(f"❌ کاربر {user_id} عضو کانال نیست (وضعیت: {chat_member.status})")
+            return False
+            
+    except Exception as e:
+        error_msg = str(e).lower()
+        logger.error(f"⚠️ خطا در بررسی عضویت کاربر {user_id}: {e}")
+        
+        if "user not found" in error_msg or "chat not found" in error_msg:
+            return False
+        
         return False
-    except:
-        return False
+
+async def send_join_message(update: Update):
+    """ارسال پیام الزام به عضویت با دکمه بررسی"""
+    join_button = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+    ])
+    
+    message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+
+📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
+
+🆔 **آیدی کانال:** {CHANNEL_ID}
+
+✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
+
+---
+
+💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
+
+    await update.message.reply_text(
+        message,
+        reply_markup=join_button,
+        parse_mode='Markdown',
+        disable_web_page_preview=True
+    )
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
@@ -264,7 +304,6 @@ main_menu = ReplyKeyboardMarkup([
     [KeyboardButton("💬 مشاوره هوشمند"), KeyboardButton("📞 ارتباط با پشتیبانی")]
 ], resize_keyboard=True)
 
-# ساب‌منوها
 market_menu = ReplyKeyboardMarkup([
     [KeyboardButton("👤 کارجو"), KeyboardButton("💼 فریلنسر")],
     [KeyboardButton("🏢 کارفرما")],
@@ -332,7 +371,6 @@ survey_questions = [
     ("consulting", "7️⃣ در چه زمینه‌ای نیاز به مشاوره دارید؟")
 ]
 
-# ==================== سوالات فرم ارزیابی ====================
 assessment_questions = [
     ("full_name", "👤 نام و نام خانوادگی:"),
     ("phone", "📲 شماره تماس:"),
@@ -396,34 +434,6 @@ async def notify_admin(context, user_id, info, section_type="personal"):
     except Exception as e:
         logger.error(f"خطا در ارسال نوتیفیکیشن: {e}")
 
-# ==================== ارسال پیام عضویت ====================
-async def send_join_message(update: Update):
-    """ارسال پیام الزام به عضویت"""
-    join_button = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
-    ])
-    
-    message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
-
-📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
-
-🆔 **آیدی کانال:** {CHANNEL_ID}
-
-✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
-
----
-
-💡 **نکته:** اگر قبلاً عضو شده‌اید، ممکن است بات وضعیت را به روز نکرده باشد. 
-روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
-
-    await update.message.reply_text(
-        message,
-        reply_markup=join_button,
-        parse_mode='Markdown',
-        disable_web_page_preview=True
-    )
-
 # ==================== دستور start ====================
 async def start(update: Update, context):
     user_id = update.effective_user.id
@@ -435,6 +445,7 @@ async def start(update: Update, context):
         await send_join_message(update)
         return
     
+    # اگر عضو هست، ادامه بده
     user_info = get_user_info(user_id)
     logger.info(f"✅ کاربر {user_id} وارد شد - عضو کانال")
     
@@ -509,7 +520,7 @@ async def handle_menu(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # بررسی عضویت در کانال
+    # ========== بررسی عضویت در کانال ==========
     is_member = await is_member_of_channel(user_id, context)
     
     if not is_member:
@@ -555,7 +566,6 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["👤 کارجو", "💼 فریلنسر", "🏢 کارفرما"]:
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -588,7 +598,6 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["🌟 برند شخصی", "🚀 برند محصولی", "🏛️ برند سازمانی"]:
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -621,7 +630,6 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["❤️ نیک‌اندیش داخل ایران", "🌍 نیک‌اندیش خارج ایران", "🤝 پروژه اجتماعی"]:
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -654,7 +662,6 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["🧠 توسعه فردی", "🎯 توسعه شغلی", "📈 توسعه اثر اجتماعی"]:
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -688,7 +695,6 @@ async def handle_menu(update: Update, context):
     
     if text in ["💰 استعلام قیمت", "🌍 تأمین‌کننده خارجی", "📦 حمل و اسناد", 
                 "📈 فروش و بازاریابی", "🎓 آموزش واردات", "🧭 مشاوره تخصصی"]:
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -713,7 +719,6 @@ async def handle_menu(update: Update, context):
     
     # ========== محصولات سیناپس ==========
     if text == "🌱 محصولات سیناپس":
-        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
         if not has_completed_assessment(user_id):
             clear_user_state(user_id)
             set_user_state(user_id, "assessment", 0, {})
@@ -909,12 +914,10 @@ async def handle_menu(update: Update, context):
                 _, next_q = assessment_questions[step + 1]
                 await update.message.reply_text(next_q, reply_markup=back_menu)
             else:
-                # آخرین سوال - ذخیره و نمایش پیام نهایی
                 save_assessment(user_id, temp)
                 await notify_admin(context, user_id, temp, "assessment")
                 clear_user_state(user_id)
                 
-                # پیام نهایی
                 final_message = f"""🌱 **ممنون که با حوصله به سؤال‌ها پاسخ دادی.**
 
 پاسخ‌های تو توسط سیناپس بررسی می‌شود تا تصویری شفاف‌تر از وضعیت فعلی، ظرفیت‌ها، گره‌های مسیر و فرصت‌های رشدت ترسیم شود.
@@ -1050,11 +1053,6 @@ async def handle_callback(update: Update, context):
     
     user_id = query.from_user.id
     data = query.data
-    state = get_user_state(user_id)
-    temp = state.get("temp", {})
-    section = state.get("section", "")
-    
-    logger.info(f"کاربر {user_id} روی دکمه {data} کلیک کرد - بخش: {section}")
     
     # ===== بررسی عضویت =====
     if data == "check_membership":
@@ -1103,19 +1101,27 @@ async def handle_callback(update: Update, context):
                 parse_mode='Markdown'
             )
         else:
+            join_button = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+                [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")]
+            ])
+            
             await query.edit_message_text(
                 f"❌ **هنوز عضو کانال نشده‌اید!**\n\n"
                 f"📢 لطفاً ابتدا در کانال {CHANNEL_ID} عضو شوید.\n"
-                f"✅ سپس روی دکمه 'بررسی عضویت' کلیک کنید.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-                    [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")]
-                ]),
+                f"✅ سپس روی دکمه 'بررسی مجدد' کلیک کنید.",
+                reply_markup=join_button,
                 parse_mode='Markdown'
             )
         return
     
-    # ===== تایید ثبت =====
+    # ===== بقیه کدهای قبلی =====
+    state = get_user_state(user_id)
+    temp = state.get("temp", {})
+    section = state.get("section", "")
+    
+    logger.info(f"کاربر {user_id} روی دکمه {data} کلیک کرد - بخش: {section}")
+    
     if data == "confirm":
         try:
             if section == "personal_confirm":
@@ -1180,7 +1186,6 @@ async def handle_callback(update: Update, context):
             )
             clear_user_state(user_id)
     
-    # ===== ویرایش =====
     elif data == "edit":
         if section == "personal_confirm":
             new_section = "personal"
@@ -1206,7 +1211,6 @@ async def handle_callback(update: Update, context):
             parse_mode='Markdown'
         )
     
-    # ===== انصراف =====
     elif data == "cancel":
         clear_user_state(user_id)
         await query.edit_message_reply_markup(reply_markup=None)
