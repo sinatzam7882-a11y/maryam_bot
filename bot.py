@@ -83,9 +83,9 @@ def generate_excel_report():
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
-    # هدرها
-    headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "نام کسب و کار", 
-               "تاریخ تولد", "شماره تماس", "آدرس", "راه معرفی", "تاریخ ثبت"]
+    # هدرها با ستون‌های جدید
+    headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "تاریخ تولد", 
+               "شماره تماس", "شهر", "نام کسب و کار", "آدرس", "راه معرفی", "تاریخ ثبت"]
     
     # استایل هدر
     header_font = Font(bold=True, color="FFFFFF", size=12)
@@ -107,12 +107,13 @@ def generate_excel_report():
         ws1.cell(row=row, column=2, value=int(user_id) if user_id.isdigit() else user_id)
         ws1.cell(row=row, column=3, value=info.get('first_name', ''))
         ws1.cell(row=row, column=4, value=info.get('last_name', ''))
-        ws1.cell(row=row, column=5, value=info.get('business_name', ''))
-        ws1.cell(row=row, column=6, value=info.get('birth_date', ''))
-        ws1.cell(row=row, column=7, value=info.get('phone', ''))
-        ws1.cell(row=row, column=8, value=info.get('address', ''))
-        ws1.cell(row=row, column=9, value=info.get('referral_source', ''))
-        ws1.cell(row=row, column=10, value=info.get('last_update', ''))
+        ws1.cell(row=row, column=5, value=info.get('birth_date', ''))
+        ws1.cell(row=row, column=6, value=info.get('phone', ''))
+        ws1.cell(row=row, column=7, value=info.get('city', ''))
+        ws1.cell(row=row, column=8, value=info.get('business_name', ''))
+        ws1.cell(row=row, column=9, value=info.get('address', ''))
+        ws1.cell(row=row, column=10, value=info.get('referral_source', ''))
+        ws1.cell(row=row, column=11, value=info.get('last_update', ''))
     
     # تنظیم عرض ستون‌ها
     for col in range(1, len(headers)+1):
@@ -195,12 +196,13 @@ def get_confirm_keyboard():
         [InlineKeyboardButton("❌ انصراف", callback_data="cancel")]
     ])
 
-# ==================== سوالات ====================
+# ==================== سوالات (با شهر اضافه شده) ====================
 personal_info_questions = [
     ("first_name", "👤 نام خود را وارد کنید:"),
     ("last_name", "👨‍👩‍👧 نام خانوادگی خود را وارد کنید:"),
     ("birth_date", "📅 تاریخ تولد (مثال: 1370/05/15):"),
     ("phone", "📞 شماره تماس موبایل:"),
+    ("city", "🏙️ شهر خود را وارد کنید:"),
 ]
 
 business_info_questions = [
@@ -241,6 +243,7 @@ async def notify_admin(context, user_id, info):
     try:
         message = f"🆕 **کاربر جدید ثبت‌نام کرد!**\n\n"
         message += f"👤 نام: {info.get('first_name', '')} {info.get('last_name', '')}\n"
+        message += f"🏙️ شهر: {info.get('city', '')}\n"
         message += f"🏢 کسب و کار: {info.get('business_name', '')}\n"
         message += f"📞 شماره: {info.get('phone', '')}\n"
         message += f"🆔 آیدی: `{user_id}`"
@@ -287,6 +290,7 @@ def get_info_summary(info, section_type):
 👨‍👩‍👧 نام خانوادگی: {info.get('last_name', '❌')}
 📅 تاریخ تولد: {info.get('birth_date', '❌')}
 📞 شماره تماس: {info.get('phone', '❌')}
+🏙️ شهر: {info.get('city', '❌')}
 
 آیا اطلاعات صحیح است؟"""
     
@@ -373,7 +377,7 @@ async def handle_menu(update: Update, context):
         )
         return
     
-    # ========== پشتیبانی (رفع شده) ==========
+    # ========== پشتیبانی ==========
     if text == "📞 ارتباط با پشتیبانی":
         support_text = f"""📞 **ارتباط با پشتیبانی**
 
@@ -605,7 +609,7 @@ async def show_summary(update: Update, context):
     for i, (uid, info) in enumerate(list(users.items())[-5:], 1):
         name = f"{info.get('first_name', '')} {info.get('last_name', '')}"
         business = info.get('business_name', 'نامشخص')
-        summary += f"{i+1}. {name} - {business}\n"
+        summary += f"{i}. {name} - {business}\n"
     
     await update.message.reply_text(summary, parse_mode='Markdown')
 
@@ -619,7 +623,6 @@ async def broadcast(update: Update, context):
         await update.message.reply_text("📭 هیچ کاربری ثبت نشده!")
         return
     
-    # دریافت پیام از دستور
     message_text = " ".join(context.args)
     if not message_text:
         await update.message.reply_text("⚠️ لطفاً پیام خود را وارد کنید.\nمثال: /broadcast سلام به همه!")
@@ -644,7 +647,7 @@ async def broadcast(update: Update, context):
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("getexcel", get_excel))  # 🆕 خروجی اکسل
+app.add_handler(CommandHandler("getexcel", get_excel))
 app.add_handler(CommandHandler("getdata", get_data))
 app.add_handler(CommandHandler("summary", show_summary))
 app.add_handler(CommandHandler("broadcast", broadcast))
