@@ -5,7 +5,6 @@ from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatMemberStatus
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 from groq import Groq
 
@@ -101,21 +100,18 @@ def has_completed_assessment(user_id):
     assessments = read_json(ASSESSMENT_FILE, {})
     return str(user_id) in assessments and len(assessments[str(user_id)]) > 5
 
-# ==================== توابع بررسی عضویت ====================
+# ==================== توابع بررسی عضویت (اصلاح شده) ====================
 async def is_member_of_channel(user_id, context):
-    """بررسی عضویت کاربر در کانال با استفاده از وضعیت‌های استاندارد"""
+    """بررسی عضویت کاربر در کانال با روش مطمئن"""
     try:
+        # تلاش برای دریافت اطلاعات عضویت
         chat_member = await context.bot.get_chat_member(
             chat_id=CHANNEL_ID, 
             user_id=user_id
         )
         
-        valid_statuses = [
-            ChatMemberStatus.MEMBER,
-            ChatMemberStatus.ADMINISTRATOR,
-            ChatMemberStatus.OWNER,
-            "creator" # نسخه پشتیبان برای احتیاط
-        ]
+        # وضعیت‌های معتبر برای عضویت
+        valid_statuses = ['member', 'administrator', 'creator']
         
         if chat_member.status in valid_statuses:
             logger.info(f"✅ کاربر {user_id} عضو کانال است (وضعیت: {chat_member.status})")
@@ -125,17 +121,31 @@ async def is_member_of_channel(user_id, context):
             return False
             
     except Exception as e:
+        error_msg = str(e).lower()
         logger.error(f"⚠️ خطا در بررسی عضویت کاربر {user_id}: {e}")
+        
+        # اگر کاربر پیدا نشد یا خطای دیگر، فرض میکنیم عضو نیست
+        if "user not found" in error_msg or "chat not found" in error_msg:
+            return False
+        
+        # برای سایر خطاها هم false برمیگردونیم
         return False
 
-async def send_join_message(update: Update):
-    """ارسال پیام الزام به عضویت با دکمه بررسی"""
-    join_button = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
-        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
-    ])
+async def check_and_handle_membership(update: Update, context, callback=None):
+    """بررسی عضویت و مدیریت پیام‌ها"""
+    user_id = update.effective_user.id
     
-    message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+    # بررسی عضویت
+    is_member = await is_member_of_channel(user_id, context)
+    
+    if not is_member:
+        # کاربر عضو نیست - پیام عضویت ارسال کن
+        join_button = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+        ])
+        
+        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
 
 📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
 
@@ -147,20 +157,22 @@ async def send_join_message(update: Update):
 
 💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
 
-    if update.message:
         await update.message.reply_text(
             message,
             reply_markup=join_button,
             parse_mode='Markdown',
             disable_web_page_preview=True
         )
-    elif update.callback_query:
-        await update.callback_query.message.reply_text(
-            message,
-            reply_markup=join_button,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+        return False
+    
+    # کاربر عضو است
+    logger.info(f"✅ کاربر {user_id} عضو کانال است - ادامه فرآیند")
+    
+    # اگر تابع callback وجود داشت، آن را اجرا کن
+    if callback:
+        await callback(update, context)
+    
+    return True
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
@@ -443,20 +455,11 @@ async def notify_admin(context, user_id, info, section_type="personal"):
     except Exception as e:
         logger.error(f"خطا در ارسال نوتیفیکیشن: {e}")
 
-# ==================== دستور start ====================
-async def start(update: Update, context):
+# ==================== تابع نمایش خوش‌آمدگویی ====================
+async def show_welcome_message(update: Update, context):
+    """نمایش پیام خوش‌آمدگویی بعد از تایید عضویت"""
     user_id = update.effective_user.id
-    
-    # بررسی عضویت در کانال
-    is_member = await is_member_of_channel(user_id, context)
-    
-    if not is_member:
-        await send_join_message(update)
-        return
-    
-    # اگر عضو هست، ادامه بده
     user_info = get_user_info(user_id)
-    logger.info(f"✅ کاربر {user_id} وارد شد - عضو کانال")
     
     if is_user_registered(user_id):
         welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
@@ -489,7 +492,7 @@ async def start(update: Update, context):
 🌱 محصولات سیناپس
 
 لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
-
+    
     try:
         with open('images/welcome.jpg', 'rb') as photo:
             await update.message.reply_photo(
@@ -500,40 +503,76 @@ async def start(update: Update, context):
     except:
         await update.message.reply_text(welcome_msg, reply_markup=main_menu)
 
-# ==================== تابع نمایش خلاصه ====================
-def get_info_summary(info, section_type):
-    if section_type == "personal":
-        return f"""📝 **خلاصه اطلاعات شخصی شما:**
-
-👤 نام: {info.get('first_name', '❌')}
-👨‍👩‍👧 نام خانوادگی: {info.get('last_name', '❌')}
-📅 تاریخ تولد: {info.get('birth_date', '❌')}
-📞 شماره تماس: {info.get('phone', '❌')}
-🏙️ شهر: {info.get('city', '❌')}
-
-آیا اطلاعات صحیح است؟"""
+# ==================== دستور start (اصلاح شده) ====================
+async def start(update: Update, context):
+    user_id = update.effective_user.id
     
-    elif section_type == "business":
-        return f"""🏢 **خلاصه اطلاعات کسب و کار شما:**
-
-نام کسب و کار: {info.get('business_name', '❌')}
-📍 آدرس: {info.get('address', '❌')}
-📢 راه معرفی: {info.get('referral_source', '❌')}
-
-آیا اطلاعات صحیح است؟"""
+    # بررسی عضویت در کانال
+    is_member = await is_member_of_channel(user_id, context)
     
-    return ""
+    if not is_member:
+        # کاربر عضو نیست - نمایش پیام عضویت
+        join_button = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+        ])
+        
+        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
 
-# ==================== پردازش منو ====================
+📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
+
+🆔 **آیدی کانال:** {CHANNEL_ID}
+
+✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
+
+---
+
+💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
+
+        await update.message.reply_text(
+            message,
+            reply_markup=join_button,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
+    # کاربر عضو است - نمایش پیام خوش‌آمدگویی
+    await show_welcome_message(update, context)
+
+# ==================== پردازش منو (اصلاح شده) ====================
 async def handle_menu(update: Update, context):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # ========== بررسی عضویت در کانال ==========
+    # بررسی عضویت در کانال برای همه پیام‌ها
     is_member = await is_member_of_channel(user_id, context)
     
     if not is_member:
-        await send_join_message(update)
+        # کاربر عضو نیست - نمایش پیام عضویت
+        join_button = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+            [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+        ])
+        
+        message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+
+📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
+
+🆔 **آیدی کانال:** {CHANNEL_ID}
+
+✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
+
+---
+
+💡 **نکته:** اگر قبلاً عضو شده‌اید، روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
+
+        await update.message.reply_text(
+            message,
+            reply_markup=join_button,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
         return
     
     # ========== راهنمای انتخاب مسیر ==========
@@ -1055,7 +1094,31 @@ async def handle_menu(update: Update, context):
                 reply_markup=back_menu
             )
 
-# ==================== دکمه‌های اینلاین ====================
+# ==================== تابع خلاصه اطلاعات ====================
+def get_info_summary(info, section_type):
+    if section_type == "personal":
+        return f"""📝 **خلاصه اطلاعات شخصی شما:**
+
+👤 نام: {info.get('first_name', '❌')}
+👨‍👩‍👧 نام خانوادگی: {info.get('last_name', '❌')}
+📅 تاریخ تولد: {info.get('birth_date', '❌')}
+📞 شماره تماس: {info.get('phone', '❌')}
+🏙️ شهر: {info.get('city', '❌')}
+
+آیا اطلاعات صحیح است؟"""
+    
+    elif section_type == "business":
+        return f"""🏢 **خلاصه اطلاعات کسب و کار شما:**
+
+نام کسب و کار: {info.get('business_name', '❌')}
+📍 آدرس: {info.get('address', '❌')}
+📢 راه معرفی: {info.get('referral_source', '❌')}
+
+آیا اطلاعات صحیح است؟"""
+    
+    return ""
+
+# ==================== دکمه‌های اینلاین (اصلاح شده) ====================
 async def handle_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -1068,8 +1131,10 @@ async def handle_callback(update: Update, context):
         is_member = await is_member_of_channel(user_id, context)
         
         if is_member:
+            # حذف دکمه‌ها
             await query.edit_message_reply_markup(reply_markup=None)
             
+            # نمایش پیام خوش‌آمدگویی
             user_info = get_user_info(user_id)
             
             if is_user_registered(user_id):
@@ -1110,6 +1175,7 @@ async def handle_callback(update: Update, context):
                 parse_mode='Markdown'
             )
         else:
+            # کاربر هنوز عضو نشده
             join_button = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
                 [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")]
