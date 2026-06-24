@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = 8065571732  # 🔴 این رو با ایدی خودت عوض کن!
-CHANNEL_ID = "@patrik_rwm"  # آیدی کانال
+CHANNEL_ID = "@synapse_os"  # آیدی کانال
 
 client = Groq(api_key=GROQ_API_KEY)
 
