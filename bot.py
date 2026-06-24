@@ -77,7 +77,6 @@ def is_user_registered(user_id):
     """بررسی اینکه کاربر ثبت‌نام کرده یا نه"""
     users = read_json(USERS_FILE, {})
     user_data = users.get(str(user_id), {})
-    # چک میکنه که نام وجود داشته باشه
     return user_data.get("first_name") is not None and user_data.get("first_name") != ""
 
 def is_business_registered(user_id):
@@ -581,7 +580,7 @@ async def handle_menu(update: Update, context):
                 reply_markup=back_menu
             )
 
-# ==================== دکمه‌های اینلاین ====================
+# ==================== دکمه‌های اینلاین (اصلاح شده) ====================
 async def handle_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -596,13 +595,16 @@ async def handle_callback(update: Update, context):
     
     if data == "confirm":
         try:
-            if "personal" in section:
-                # ذخیره اطلاعات شخصی
+            # ===== ثبت اطلاعات شخصی =====
+            if section == "personal_confirm":
                 save_user_info(user_id, temp)
                 await notify_admin(context, user_id, temp, "personal")
                 
+                # حذف دکمه‌های اینلاین از پیام قبلی
+                await query.edit_message_reply_markup(reply_markup=None)
+                
                 # ارسال پیام موفقیت با منوی اصلی
-                await query.edit_message_text(
+                await query.message.reply_text(
                     f"✅ **ثبت‌نام با موفقیت انجام شد!** 🎉\n\n"
                     f"👤 نام: {temp.get('first_name', '')} {temp.get('last_name', '')}\n"
                     f"🏙️ شهر: {temp.get('city', '')}\n"
@@ -616,15 +618,19 @@ async def handle_callback(update: Update, context):
                     reply_markup=main_menu,
                     parse_mode='Markdown'
                 )
-                
-            elif "business" in section:
-                # دریافت اطلاعات کاربر برای ذخیره کامل
+                clear_user_state(user_id)
+                return
+            
+            # ===== ثبت اطلاعات کسب و کار =====
+            elif section == "business_confirm":
                 user_info = get_user_info(user_id)
                 temp.update(user_info)
                 save_user_info(user_id, temp)
                 await notify_admin(context, user_id, temp, "business")
                 
-                await query.edit_message_text(
+                await query.edit_message_reply_markup(reply_markup=None)
+                
+                await query.message.reply_text(
                     f"✅ **اطلاعات کسب و کار شما ثبت شد!** 🏢\n\n"
                     f"🏢 نام کسب و کار: {temp.get('business_name', '')}\n"
                     f"📍 آدرس: {temp.get('address', '')}\n"
@@ -636,29 +642,55 @@ async def handle_callback(update: Update, context):
                     reply_markup=main_menu,
                     parse_mode='Markdown'
                 )
+                clear_user_state(user_id)
+                return
             
-            clear_user_state(user_id)
+            else:
+                # اگر حالت ناشناخته بود
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.reply_text(
+                    "⚠️ خطا در ثبت اطلاعات. لطفاً دوباره تلاش کنید.",
+                    reply_markup=main_menu
+                )
+                clear_user_state(user_id)
+                return
             
         except Exception as e:
             logger.error(f"خطا در تایید: {e}")
-            await query.edit_message_text(
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
                 f"⚠️ خطا در ثبت اطلاعات: {str(e)}\n\nلطفاً دوباره تلاش کنید.",
                 reply_markup=main_menu
             )
+            clear_user_state(user_id)
     
     elif data == "edit":
-        # برگرداندن به مرحله اول برای ویرایش
-        section = section.replace("_confirm", "")
-        set_user_state(user_id, section, 0, {})
-        
-        if section == "personal":
+        # اصلاح: بخش رو از حالت confirm خارج کن
+        if section == "personal_confirm":
+            new_section = "personal"
             questions = personal_info_questions
             title = "✏️ ویرایش اطلاعات شخصی"
-        else:
+        elif section == "business_confirm":
+            new_section = "business"
             questions = business_info_questions
             title = "✏️ ویرایش اطلاعات کسب و کار"
+        else:
+            # اگر حالت دیگه‌ای بود
+            await query.edit_message_text(
+                "⚠️ خطا در ویرایش. لطفاً دوباره تلاش کنید.",
+                reply_markup=main_menu
+            )
+            clear_user_state(user_id)
+            return
         
-        await query.edit_message_text(
+        # حذف دکمه‌های اینلاین از پیام قبلی
+        await query.edit_message_reply_markup(reply_markup=None)
+        
+        # تنظیم حالت جدید
+        set_user_state(user_id, new_section, 0, {})
+        
+        # ارسال سوال اول
+        await query.message.reply_text(
             f"{title}\n\n{questions[0][1]}",
             reply_markup=back_menu,
             parse_mode='Markdown'
@@ -667,7 +699,9 @@ async def handle_callback(update: Update, context):
     elif data == "cancel":
         clear_user_state(user_id)
         
-        await query.edit_message_text(
+        await query.edit_message_reply_markup(reply_markup=None)
+        
+        await query.message.reply_text(
             "❌ **ثبت‌نامه لغو شد.**\n\n"
             "اطلاعات شما ذخیره نشد.\n"
             "در صورت تمایل می‌توانید دوباره ثبت‌نام کنید.\n\n"
