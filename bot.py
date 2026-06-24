@@ -71,6 +71,15 @@ def get_user_info(user_id):
     users = read_json(USERS_FILE, {})
     return users.get(str(user_id), {})
 
+def delete_user_info(user_id):
+    """حذف اطلاعات کاربر (وقتی انصراف می‌دهد)"""
+    users = read_json(USERS_FILE, {})
+    if str(user_id) in users:
+        del users[str(user_id)]
+        write_json(USERS_FILE, users)
+        return True
+    return False
+
 # ==================== خروجی اکسل حرفه‌ای ====================
 def generate_excel_report():
     """ایجاد فایل اکسل با فرمت حرفه‌ای"""
@@ -83,11 +92,9 @@ def generate_excel_report():
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
-    # هدرها با ستون‌های جدید
     headers = ["ردیف", "آیدی کاربر", "نام", "نام خانوادگی", "تاریخ تولد", 
                "شماره تماس", "شهر", "نام کسب و کار", "آدرس", "راه معرفی", "تاریخ ثبت"]
     
-    # استایل هدر
     header_font = Font(bold=True, color="FFFFFF", size=12)
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_alignment = Alignment(horizontal="center", vertical="center")
@@ -101,7 +108,6 @@ def generate_excel_report():
         cell.alignment = header_alignment
         cell.border = border
     
-    # پر کردن داده‌ها
     for row, (user_id, info) in enumerate(users.items(), 2):
         ws1.cell(row=row, column=1, value=row-1)
         ws1.cell(row=row, column=2, value=int(user_id) if user_id.isdigit() else user_id)
@@ -115,7 +121,6 @@ def generate_excel_report():
         ws1.cell(row=row, column=10, value=info.get('referral_source', ''))
         ws1.cell(row=row, column=11, value=info.get('last_update', ''))
     
-    # تنظیم عرض ستون‌ها
     for col in range(1, len(headers)+1):
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
@@ -174,7 +179,6 @@ def generate_excel_report():
     ws3.column_dimensions['A'].width = 30
     ws3.column_dimensions['B'].width = 30
     
-    # ذخیره فایل
     wb.save(EXCEL_FILE)
     return EXCEL_FILE
 
@@ -196,7 +200,7 @@ def get_confirm_keyboard():
         [InlineKeyboardButton("❌ انصراف", callback_data="cancel")]
     ])
 
-# ==================== سوالات (با شهر اضافه شده) ====================
+# ==================== سوالات ====================
 personal_info_questions = [
     ("first_name", "👤 نام خود را وارد کنید:"),
     ("last_name", "👨‍👩‍👧 نام خانوادگی خود را وارد کنید:"),
@@ -318,6 +322,28 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات شخصی ==========
     if text == "🆔 اطلاعات شخصی":
+        # چک کن که کاربر قبلاً ثبت نام کرده یا نه
+        user_info = get_user_info(user_id)
+        if user_info.get("first_name"):
+            await update.message.reply_text(
+                f"✅ شما قبلاً اطلاعات شخصی خود را ثبت کرده‌اید.\n\n"
+                f"👤 نام: {user_info.get('first_name', '')}\n"
+                f"👨‍👩‍👧 نام خانوادگی: {user_info.get('last_name', '')}\n"
+                f"📅 تاریخ تولد: {user_info.get('birth_date', '')}\n"
+                f"📞 شماره تماس: {user_info.get('phone', '')}\n"
+                f"🏙️ شهر: {user_info.get('city', '')}\n\n"
+                f"برای ویرایش، دوباره روی دکمه 'اطلاعات شخصی' کلیک کنید.",
+                reply_markup=main_menu
+            )
+            # شروع مجدد فرآیند برای ویرایش
+            set_user_state(user_id, "personal", 0, {})
+            await update.message.reply_text(
+                f"📝 **ویرایش اطلاعات شخصی**\n\n{personal_info_questions[0][1]}",
+                reply_markup=back_menu,
+                parse_mode='Markdown'
+            )
+            return
+        
         set_user_state(user_id, "personal", 0, {})
         await update.message.reply_text(
             f"📝 **ثبت اطلاعات شخصی**\n\n{personal_info_questions[0][1]}",
@@ -328,6 +354,24 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات کسب و کار ==========
     if text == "🏢 اطلاعات کسب و کار":
+        user_info = get_user_info(user_id)
+        if user_info.get("business_name"):
+            await update.message.reply_text(
+                f"✅ شما قبلاً اطلاعات کسب و کار خود را ثبت کرده‌اید.\n\n"
+                f"🏢 نام کسب و کار: {user_info.get('business_name', '')}\n"
+                f"📍 آدرس: {user_info.get('address', '')}\n"
+                f"📢 راه معرفی: {user_info.get('referral_source', '')}\n\n"
+                f"برای ویرایش، دوباره روی دکمه 'اطلاعات کسب و کار' کلیک کنید.",
+                reply_markup=main_menu
+            )
+            set_user_state(user_id, "business", 0, {})
+            await update.message.reply_text(
+                f"🏢 **ویرایش اطلاعات کسب و کار**\n\n{business_info_questions[0][1]}",
+                reply_markup=back_menu,
+                parse_mode='Markdown'
+            )
+            return
+        
         set_user_state(user_id, "business", 0, {})
         await update.message.reply_text(
             f"🏢 **ثبت اطلاعات کسب و کار**\n\n{business_info_questions[0][1]}",
@@ -345,6 +389,16 @@ async def handle_menu(update: Update, context):
                 "• 🆔 اطلاعات شخصی\n"
                 "• 🏢 اطلاعات کسب و کار\n\n"
                 "سپس می‌توانید پرسشنامه را پر کنید.",
+                reply_markup=main_menu
+            )
+            return
+        
+        # چک کن که قبلاً پرسشنامه رو پر کرده یا نه
+        surveys = read_json(SURVEY_FILE, {})
+        if str(user_id) in surveys and len(surveys[str(user_id)]) > 2:
+            await update.message.reply_text(
+                "✅ شما قبلاً پرسشنامه را تکمیل کرده‌اید.\n"
+                "از بخش 'مشاوره هوشمند' می‌توانید سوالات خود را بپرسید.",
                 reply_markup=main_menu
             )
             return
@@ -520,37 +574,86 @@ async def handle_callback(update: Update, context):
     
     if data == "confirm":
         section = state["section"]
+        
         if "personal" in section:
+            # ذخیره اطلاعات شخصی
             save_user_info(user_id, temp)
-            await query.edit_message_text(
-                f"✅ اطلاعات شخصی شما با موفقیت ثبت شد!\n\nبه منوی اصلی بازگشتید 👇",
-                reply_markup=main_menu
-            )
+            # ارسال نوتیفیکیشن به ادمین
             await notify_admin(context, user_id, temp)
             
-        elif "business" in section:
-            save_user_info(user_id, temp)
+            # نمایش پیام موفقیت با منوی اصلی
             await query.edit_message_text(
-                f"✅ اطلاعات کسب و کار شما با موفقیت ثبت شد!\n\nبه منوی اصلی بازگشتید 👇",
-                reply_markup=main_menu
+                f"✅ **ثبت‌نام با موفقیت انجام شد!** 🎉\n\n"
+                f"👤 نام: {temp.get('first_name', '')} {temp.get('last_name', '')}\n"
+                f"🏙️ شهر: {temp.get('city', '')}\n"
+                f"📞 شماره تماس: {temp.get('phone', '')}\n\n"
+                f"📌 اطلاعات شما در سیستم ثبت شد.\n"
+                f"حالا می‌توانید:\n"
+                f"• اطلاعات کسب و کار خود را ثبت کنید\n"
+                f"• پرسشنامه تخصصی را پر کنید\n"
+                f"• از مشاوره هوشمند استفاده کنید\n\n"
+                f"به منوی اصلی بازگشتید 👇",
+                reply_markup=main_menu,
+                parse_mode='Markdown'
+            )
+            
+        elif "business" in section:
+            # ذخیره اطلاعات کسب و کار
+            save_user_info(user_id, temp)
+            
+            # نمایش پیام موفقیت با منوی اصلی
+            await query.edit_message_text(
+                f"✅ **اطلاعات کسب و کار شما ثبت شد!** 🏢\n\n"
+                f"🏢 نام کسب و کار: {temp.get('business_name', '')}\n"
+                f"📍 آدرس: {temp.get('address', '')}\n"
+                f"📢 راه معرفی: {temp.get('referral_source', '')}\n\n"
+                f"📌 حالا می‌توانید:\n"
+                f"• پرسشنامه تخصصی را پر کنید\n"
+                f"• از مشاوره هوشمند استفاده کنید\n\n"
+                f"به منوی اصلی بازگشتید 👇",
+                reply_markup=main_menu,
+                parse_mode='Markdown'
             )
         
+        # پاک کردن وضعیت کاربر
         clear_user_state(user_id)
-        
+    
     elif data == "edit":
+        # برگرداندن به مرحله اول برای ویرایش
         section = state["section"].replace("_confirm", "")
         set_user_state(user_id, section, 0, {})
-        questions = personal_info_questions if section == "personal" else business_info_questions
-        await query.edit_message_text(
-            f"✏️ اطلاعات را دوباره وارد کنید:\n\n{questions[0][1]}",
-            reply_markup=back_menu
-        )
         
-    elif data == "cancel":
-        clear_user_state(user_id)
+        # انتخاب سوالات مناسب
+        if section == "personal":
+            questions = personal_info_questions
+            title = "✏️ ویرایش اطلاعات شخصی"
+        else:
+            questions = business_info_questions
+            title = "✏️ ویرایش اطلاعات کسب و کار"
+        
         await query.edit_message_text(
-            "❌ ثبت‌نامه لغو شد.\n\nبه منوی اصلی بازگشتید 👇",
-            reply_markup=main_menu
+            f"{title}\n\n{questions[0][1]}",
+            reply_markup=back_menu,
+            parse_mode='Markdown'
+        )
+    
+    elif data == "cancel":
+        # انصراف و حذف اطلاعات موقت
+        section = state["section"]
+        clear_user_state(user_id)
+        
+        # حذف اطلاعات از دیتابیس (اگر قبلاً ذخیره شده بود)
+        user_info = get_user_info(user_id)
+        if user_info.get("first_name") and "personal" in section:
+            delete_user_info(user_id)
+        
+        await query.edit_message_text(
+            "❌ **ثبت‌نامه لغو شد.**\n\n"
+            "اطلاعات شما ذخیره نشد.\n"
+            "در صورت تمایل می‌توانید دوباره ثبت‌نام کنید.\n\n"
+            "به منوی اصلی بازگشتید 👇",
+            reply_markup=main_menu,
+            parse_mode='Markdown'
         )
 
 # ==================== دستورات ادمین ====================
