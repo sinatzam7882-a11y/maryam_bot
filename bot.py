@@ -19,13 +19,14 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = 8065571732  # 🔴 این رو با ایدی خودت عوض کن!
-CHANNEL_ID = "@synapse_os"  # آیدی کانال
+CHANNEL_ID = "@synapdse_os"  # آیدی کانال
 
 client = Groq(api_key=GROQ_API_KEY)
 
 # فایل‌های JSON
 USERS_FILE = "users.json"
 SURVEY_FILE = "survey.json"
+ASSESSMENT_FILE = "assessment.json"  # فایل جدید برای فرم ارزیابی
 EXCEL_FILE = "users_data.xlsx"
 
 # ==================== اطلاعات پشتیبانی ====================
@@ -57,10 +58,21 @@ def save_user_info(user_id, info):
     if str(user_id) not in users:
         users[str(user_id)] = {}
     users[str(user_id)].update(info)
-    users[str(user_id)]["telegram_id"] = str(user_id)  # ذخیره آیدی تلگرام
+    users[str(user_id)]["telegram_id"] = str(user_id)
     users[str(user_id)]["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_json(USERS_FILE, users)
     logger.info(f"✅ اطلاعات کاربر {user_id} ذخیره شد")
+    return True
+
+def save_assessment(user_id, answers):
+    """ذخیره پاسخ‌های فرم ارزیابی"""
+    assessments = read_json(ASSESSMENT_FILE, {})
+    if str(user_id) not in assessments:
+        assessments[str(user_id)] = {}
+    assessments[str(user_id)].update(answers)
+    assessments[str(user_id)]["submitted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    write_json(ASSESSMENT_FILE, assessments)
+    logger.info(f"✅ فرم ارزیابی کاربر {user_id} ذخیره شد")
     return True
 
 def save_survey_answer(user_id, section, answer):
@@ -85,11 +97,19 @@ def is_business_registered(user_id):
     user_data = users.get(str(user_id), {})
     return user_data.get("business_name") is not None and user_data.get("business_name") != ""
 
-def is_member_of_channel(user_id, context):
+def has_completed_assessment(user_id):
+    """بررسی اینکه کاربر فرم ارزیابی رو پر کرده یا نه"""
+    assessments = read_json(ASSESSMENT_FILE, {})
+    return str(user_id) in assessments and len(assessments[str(user_id)]) > 5
+
+async def is_member_of_channel(user_id, context):
     """بررسی عضویت کاربر در کانال"""
     try:
-        chat_member = context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        return chat_member.status in ['member', 'administrator', 'creator']
+        chat_member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        valid_statuses = ['member', 'administrator', 'creator', 'restricted']
+        if chat_member.status in valid_statuses:
+            return True
+        return False
     except:
         return False
 
@@ -97,9 +117,11 @@ def is_member_of_channel(user_id, context):
 def generate_excel_report():
     users = read_json(USERS_FILE, {})
     surveys = read_json(SURVEY_FILE, {})
+    assessments = read_json(ASSESSMENT_FILE, {})
     
     wb = openpyxl.Workbook()
     
+    # ===== شیت 1: اطلاعات کاربران =====
     ws1 = wb.active
     ws1.title = "اطلاعات کاربران"
     
@@ -135,14 +157,53 @@ def generate_excel_report():
     for col in range(1, len(headers)+1):
         ws1.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    ws2 = wb.create_sheet("پرسشنامه")
+    # ===== شیت 2: فرم ارزیابی =====
+    ws2 = wb.create_sheet("فرم_ارزیابی")
+    
+    assessment_headers = ["ردیف", "آیدی تلگرام", "نام و نام خانوادگی", "شماره تماس", "سن", 
+                         "استان و شهر", "نقش فعلی", "حوزه تخصصی", "سه توانمندی", 
+                         "دغدغه شغلی", "درآمد ماهیانه", "هدف یک ساله", "موانع اصلی", 
+                         "مسئله حل شدنی", "نیاز اصلی", "نکته تکمیلی", "تاریخ ثبت"]
+    
+    for col, header in enumerate(assessment_headers, 1):
+        cell = ws2.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = border
+    
+    for row, (user_id, answers) in enumerate(assessments.items(), 2):
+        user_info = users.get(user_id, {})
+        ws2.cell(row=row, column=1, value=row-1)
+        ws2.cell(row=row, column=2, value=user_info.get('telegram_id', user_id))
+        ws2.cell(row=row, column=3, value=answers.get('full_name', ''))
+        ws2.cell(row=row, column=4, value=answers.get('phone', ''))
+        ws2.cell(row=row, column=5, value=answers.get('age', ''))
+        ws2.cell(row=row, column=6, value=answers.get('location', ''))
+        ws2.cell(row=row, column=7, value=answers.get('role', ''))
+        ws2.cell(row=row, column=8, value=answers.get('field', ''))
+        ws2.cell(row=row, column=9, value=answers.get('strengths', ''))
+        ws2.cell(row=row, column=10, value=answers.get('challenge', ''))
+        ws2.cell(row=row, column=11, value=answers.get('income', ''))
+        ws2.cell(row=row, column=12, value=answers.get('goal', ''))
+        ws2.cell(row=row, column=13, value=answers.get('obstacles', ''))
+        ws2.cell(row=row, column=14, value=answers.get('solve_problem', ''))
+        ws2.cell(row=row, column=15, value=answers.get('need', ''))
+        ws2.cell(row=row, column=16, value=answers.get('note', ''))
+        ws2.cell(row=row, column=17, value=answers.get('submitted_at', ''))
+    
+    for col in range(1, len(assessment_headers)+1):
+        ws2.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 25
+    
+    # ===== شیت 3: پرسشنامه =====
+    ws3 = wb.create_sheet("پرسشنامه")
     
     survey_headers = ["ردیف", "آیدی تلگرام", "نام", "نام خانوادگی", "نام کسب و کار",
                      "درباره کسب و کار", "محصولات و مزیت", "زیرساخت مجازی", 
                      "تیم", "فروش ماهیانه", "چالش اصلی", "نیاز مشاوره"]
     
     for col, header in enumerate(survey_headers, 1):
-        cell = ws2.cell(row=1, column=col, value=header)
+        cell = ws3.cell(row=1, column=col, value=header)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_alignment
@@ -150,27 +211,29 @@ def generate_excel_report():
     
     for row, (user_id, answers) in enumerate(surveys.items(), 2):
         user_info = users.get(user_id, {})
-        ws2.cell(row=row, column=1, value=row-1)
-        ws2.cell(row=row, column=2, value=user_info.get('telegram_id', user_id))
-        ws2.cell(row=row, column=3, value=user_info.get('first_name', ''))
-        ws2.cell(row=row, column=4, value=user_info.get('last_name', ''))
-        ws2.cell(row=row, column=5, value=user_info.get('business_name', ''))
-        ws2.cell(row=row, column=6, value=answers.get('about_business', ''))
-        ws2.cell(row=row, column=7, value=answers.get('products', ''))
-        ws2.cell(row=row, column=8, value=answers.get('infrastructure', ''))
-        ws2.cell(row=row, column=9, value=answers.get('team', ''))
-        ws2.cell(row=row, column=10, value=answers.get('sales', ''))
-        ws2.cell(row=row, column=11, value=answers.get('problem', ''))
-        ws2.cell(row=row, column=12, value=answers.get('consulting', ''))
+        ws3.cell(row=row, column=1, value=row-1)
+        ws3.cell(row=row, column=2, value=user_info.get('telegram_id', user_id))
+        ws3.cell(row=row, column=3, value=user_info.get('first_name', ''))
+        ws3.cell(row=row, column=4, value=user_info.get('last_name', ''))
+        ws3.cell(row=row, column=5, value=user_info.get('business_name', ''))
+        ws3.cell(row=row, column=6, value=answers.get('about_business', ''))
+        ws3.cell(row=row, column=7, value=answers.get('products', ''))
+        ws3.cell(row=row, column=8, value=answers.get('infrastructure', ''))
+        ws3.cell(row=row, column=9, value=answers.get('team', ''))
+        ws3.cell(row=row, column=10, value=answers.get('sales', ''))
+        ws3.cell(row=row, column=11, value=answers.get('problem', ''))
+        ws3.cell(row=row, column=12, value=answers.get('consulting', ''))
     
     for col in range(1, len(survey_headers)+1):
-        ws2.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
+        ws3.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
     
-    ws3 = wb.create_sheet("خلاصه آمار")
+    # ===== شیت 4: خلاصه آمار =====
+    ws4 = wb.create_sheet("خلاصه آمار")
     
     stats_data = [
         ["آمار کلی", ""],
         ["تعداد کل کاربران", len(users)],
+        ["تعداد فرم‌های ارزیابی تکمیل شده", len(assessments)],
         ["تعداد پرسشنامه‌های تکمیل شده", sum(1 for u in surveys if len(surveys[u]) > 2)],
         ["تاریخ تولید گزارش", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         ["", ""],
@@ -182,17 +245,16 @@ def generate_excel_report():
         stats_data.append([f"{i}. {name}", info.get('business_name', '')])
     
     for row, (key, value) in enumerate(stats_data, 1):
-        ws3.cell(row=row, column=1, value=key)
-        ws3.cell(row=row, column=2, value=value)
+        ws4.cell(row=row, column=1, value=key)
+        ws4.cell(row=row, column=2, value=value)
     
-    ws3.column_dimensions['A'].width = 30
-    ws3.column_dimensions['B'].width = 30
+    ws4.column_dimensions['A'].width = 30
+    ws4.column_dimensions['B'].width = 30
     
     wb.save(EXCEL_FILE)
     return EXCEL_FILE
 
-# ==================== منوهای جدید ====================
-# منوی اصلی با ۶ گزینه جدید
+# ==================== منوها ====================
 main_menu = ReplyKeyboardMarkup([
     [KeyboardButton("🟢 بازار کار"), KeyboardButton("🔵 کسب‌وکار")],
     [KeyboardButton("🟣 مسئولیت اجتماعی"), KeyboardButton("🟠 مسیر رشد")],
@@ -202,35 +264,31 @@ main_menu = ReplyKeyboardMarkup([
     [KeyboardButton("💬 مشاوره هوشمند"), KeyboardButton("📞 ارتباط با پشتیبانی")]
 ], resize_keyboard=True)
 
-# ساب‌منوی بازار کار
+# ساب‌منوها
 market_menu = ReplyKeyboardMarkup([
     [KeyboardButton("👤 کارجو"), KeyboardButton("💼 فریلنسر")],
     [KeyboardButton("🏢 کارفرما")],
     [KeyboardButton("🔙 بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
-# ساب‌منوی کسب‌وکار
 business_menu = ReplyKeyboardMarkup([
     [KeyboardButton("🌟 برند شخصی"), KeyboardButton("🚀 برند محصولی")],
     [KeyboardButton("🏛️ برند سازمانی")],
     [KeyboardButton("🔙 بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
-# ساب‌منوی مسئولیت اجتماعی
 social_menu = ReplyKeyboardMarkup([
     [KeyboardButton("❤️ نیک‌اندیش داخل ایران"), KeyboardButton("🌍 نیک‌اندیش خارج ایران")],
     [KeyboardButton("🤝 پروژه اجتماعی")],
     [KeyboardButton("🔙 بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
-# ساب‌منوی مسیر رشد
 growth_menu = ReplyKeyboardMarkup([
     [KeyboardButton("🧠 توسعه فردی"), KeyboardButton("🎯 توسعه شغلی")],
     [KeyboardButton("📈 توسعه اثر اجتماعی")],
     [KeyboardButton("🔙 بازگشت به منوی اصلی")]
 ], resize_keyboard=True)
 
-# ساب‌منوی لیدی لجستیک
 logistics_menu = ReplyKeyboardMarkup([
     [KeyboardButton("💰 استعلام قیمت"), KeyboardButton("🌍 تأمین‌کننده خارجی")],
     [KeyboardButton("📦 حمل و اسناد"), KeyboardButton("📈 فروش و بازاریابی")],
@@ -274,6 +332,24 @@ survey_questions = [
     ("consulting", "7️⃣ در چه زمینه‌ای نیاز به مشاوره دارید؟")
 ]
 
+# ==================== سوالات فرم ارزیابی ====================
+assessment_questions = [
+    ("full_name", "👤 نام و نام خانوادگی:"),
+    ("phone", "📲 شماره تماس:"),
+    ("age", "🎂 سن:"),
+    ("location", "📍 استان و شهر محل سکونت:"),
+    ("role", "1️⃣ امروز بیشتر خودت را در کدام نقش می‌بینی؟\n\n👤 کارجو\n💼 فریلنسر\n🏢 کارفرما"),
+    ("field", "2️⃣ در چه حوزه یا تخصصی فعالیت می‌کنی یا دوست داری فعالیت کنی؟"),
+    ("strengths", "3️⃣ سه توانمندی یا مهارتی که فکر می‌کنی نقطه قوت تو هستند را بنویس."),
+    ("challenge", "4️⃣ این روزها مهم‌ترین دغدغه یا چالش شغلی تو چیست؟"),
+    ("income", "5️⃣ در حال حاضر حدود درآمد ماهانه تو چقدر است؟"),
+    ("goal", "6️⃣ دوست داری یک سال آینده از نظر شغلی و درآمدی کجا باشی؟"),
+    ("obstacles", "7️⃣ فکر می‌کنی مهم‌ترین مانعی که بین تو و هدفت قرار گرفته چیست؟"),
+    ("solve_problem", "8️⃣ اگر قرار باشد فقط یک مسئله از زندگی کاری تو حل شود، دوست داری آن مسئله چه باشد؟"),
+    ("need", "9️⃣ در یک جمله بگو امروز بیشتر از هر چیز به چه کمکی نیاز داری؟"),
+    ("note", "🔟 آیا نکته‌ای هست که فکر می‌کنی برای شناخت بهتر تو باید بدانیم؟\n(اختیاری)")
+]
+
 # ==================== وضعیت کاربران ====================
 user_states = {}
 
@@ -300,6 +376,15 @@ async def notify_admin(context, user_id, info, section_type="personal"):
             message += f"👤 نام: {info.get('first_name', '')} {info.get('last_name', '')}\n"
             message += f"🏙️ شهر: {info.get('city', '')}\n"
             message += f"📞 شماره: {info.get('phone', '')}"
+        elif section_type == "assessment":
+            message = f"📋 **فرم ارزیابی جدید!**\n\n"
+            message += f"🆔 آیدی تلگرام: `{user_id}`\n"
+            message += f"👤 نام: {info.get('full_name', '')}\n"
+            message += f"📞 شماره: {info.get('phone', '')}\n"
+            message += f"🎂 سن: {info.get('age', '')}\n"
+            message += f"📍 مکان: {info.get('location', '')}\n"
+            message += f"💼 نقش: {info.get('role', '')}\n"
+            message += f"📊 حوزه: {info.get('field', '')}"
         else:
             message = f"🏢 **اطلاعات کسب و کار جدید!**\n\n"
             message += f"🆔 آیدی تلگرام: `{user_id}`\n"
@@ -311,23 +396,47 @@ async def notify_admin(context, user_id, info, section_type="personal"):
     except Exception as e:
         logger.error(f"خطا در ارسال نوتیفیکیشن: {e}")
 
+# ==================== ارسال پیام عضویت ====================
+async def send_join_message(update: Update):
+    """ارسال پیام الزام به عضویت"""
+    join_button = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")]
+    ])
+    
+    message = f"""⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**
+
+📢 **لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید.**
+
+🆔 **آیدی کانال:** {CHANNEL_ID}
+
+✅ **بعد از عضویت، روی دکمه 'بررسی عضویت' کلیک کنید.**
+
+---
+
+💡 **نکته:** اگر قبلاً عضو شده‌اید، ممکن است بات وضعیت را به روز نکرده باشد. 
+روی دکمه بررسی عضویت کلیک کنید تا دوباره چک شود."""
+
+    await update.message.reply_text(
+        message,
+        reply_markup=join_button,
+        parse_mode='Markdown',
+        disable_web_page_preview=True
+    )
+
 # ==================== دستور start ====================
 async def start(update: Update, context):
     user_id = update.effective_user.id
     
     # بررسی عضویت در کانال
-    if not is_member_of_channel(user_id, context):
-        await update.message.reply_text(
-            f"⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**\n\n"
-            f"📢 لطفاً ابتدا در کانال [{CHANNEL_ID}](https://t.me/{CHANNEL_ID[1:]}) عضو شوید.\n\n"
-            f"✅ سپس دوباره روی /start کلیک کنید.",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+    is_member = await is_member_of_channel(user_id, context)
+    
+    if not is_member:
+        await send_join_message(update)
         return
     
     user_info = get_user_info(user_id)
-    logger.info(f"کاربر {user_id} وارد شد")
+    logger.info(f"✅ کاربر {user_id} وارد شد - عضو کانال")
     
     if is_user_registered(user_id):
         welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
@@ -401,14 +510,10 @@ async def handle_menu(update: Update, context):
     text = update.message.text
     
     # بررسی عضویت در کانال
-    if not is_member_of_channel(user_id, context):
-        await update.message.reply_text(
-            f"⚠️ **برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید!**\n\n"
-            f"📢 لطفاً ابتدا در کانال [{CHANNEL_ID}](https://t.me/{CHANNEL_ID[1:]}) عضو شوید.\n\n"
-            f"✅ سپس دوباره روی /start کلیک کنید.",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+    is_member = await is_member_of_channel(user_id, context)
+    
+    if not is_member:
+        await send_join_message(update)
         return
     
     # ========== راهنمای انتخاب مسیر ==========
@@ -450,6 +555,21 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["👤 کارجو", "💼 فریلنسر", "🏢 کارفرما"]:
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
             f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
@@ -468,6 +588,21 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["🌟 برند شخصی", "🚀 برند محصولی", "🏛️ برند سازمانی"]:
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
             f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
@@ -486,6 +621,21 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["❤️ نیک‌اندیش داخل ایران", "🌍 نیک‌اندیش خارج ایران", "🤝 پروژه اجتماعی"]:
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
             f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
@@ -504,6 +654,21 @@ async def handle_menu(update: Update, context):
         return
     
     if text in ["🧠 توسعه فردی", "🎯 توسعه شغلی", "📈 توسعه اثر اجتماعی"]:
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
             f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
@@ -523,6 +688,21 @@ async def handle_menu(update: Update, context):
     
     if text in ["💰 استعلام قیمت", "🌍 تأمین‌کننده خارجی", "📦 حمل و اسناد", 
                 "📈 فروش و بازاریابی", "🎓 آموزش واردات", "🧭 مشاوره تخصصی"]:
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             f"✅ **شما گزینه '{text}' را انتخاب کردید.**\n\n"
             f"به زودی خدمات مربوط به این بخش در دسترس قرار می‌گیرد.\n"
@@ -533,6 +713,21 @@ async def handle_menu(update: Update, context):
     
     # ========== محصولات سیناپس ==========
     if text == "🌱 محصولات سیناپس":
+        # اگر کاربر فرم ارزیابی رو پر نکرده، بفرست به فرم
+        if not has_completed_assessment(user_id):
+            clear_user_state(user_id)
+            set_user_state(user_id, "assessment", 0, {})
+            await update.message.reply_text(
+                f"🌱 **ارزیابی اولیه سیناپس**\n\n"
+                f"قرار نیست در این چند سؤال قضاوت شوی یا آزمونی را پشت سر بگذاری.\n\n"
+                f"فقط می‌خواهیم تصویر شفاف‌تری از وضعیت امروزت داشته باشیم تا بتوانیم مسیر مناسب‌تری را پیشنهاد دهیم.♥️\n\n"
+                f"لطفاً با صداقت پاسخ بده.\n\n"
+                f"⸻\n\n"
+                f"{assessment_questions[0][1]}",
+                reply_markup=back_menu
+            )
+            return
+        
         await update.message.reply_text(
             "🌱 **محصولات سیناپس**\n\n"
             "به زودی ابزارها، دوره‌ها و خدمات سیناپس در این بخش قرار می‌گیرند.\n"
@@ -703,7 +898,53 @@ async def handle_menu(update: Update, context):
     step = state["step"]
     temp = state["temp"]
     
-    # پردازش اطلاعات شخصی
+    # ===== پردازش فرم ارزیابی =====
+    if section == "assessment":
+        if step < len(assessment_questions):
+            field_name, _ = assessment_questions[step]
+            temp[field_name] = text
+            
+            if step + 1 < len(assessment_questions):
+                set_user_state(user_id, "assessment", step + 1, temp)
+                _, next_q = assessment_questions[step + 1]
+                await update.message.reply_text(next_q, reply_markup=back_menu)
+            else:
+                # آخرین سوال - ذخیره و نمایش پیام نهایی
+                save_assessment(user_id, temp)
+                await notify_admin(context, user_id, temp, "assessment")
+                clear_user_state(user_id)
+                
+                # پیام نهایی
+                final_message = f"""🌱 **ممنون که با حوصله به سؤال‌ها پاسخ دادی.**
+
+پاسخ‌های تو توسط سیناپس بررسی می‌شود تا تصویری شفاف‌تر از وضعیت فعلی، ظرفیت‌ها، گره‌های مسیر و فرصت‌های رشدت ترسیم شود.
+
+📊 **گزارش شناخت سیناپس شامل:**
+
+✨ آنچه امروز از تو می‌بینیم
+✨ نقاط قوت و ظرفیت‌ها
+✨ گره‌های اصلی مسیر
+✨ فرصت‌های رشد
+✨ پیشنهاد گام بعدی
+
+⏰ حداکثر تا ۲۴ ساعت آینده آماده می‌شود.
+
+💳 **هزینه تهیه گزارش شناخت: ۲۵۰ هزار تومان**
+
+💳 **شماره کارت:** به نام مریم شهبازی
+
+📸 پس از پرداخت و ضمیمه فایل اسکرین شات، فرآیند بررسی آغاز خواهد شد.
+
+🔹 به منوی اصلی بازگشتید 👇"""
+                
+                await update.message.reply_text(
+                    final_message,
+                    reply_markup=main_menu,
+                    parse_mode='Markdown'
+                )
+        return
+    
+    # ===== پردازش اطلاعات شخصی =====
     if section == "personal":
         if step < len(personal_info_questions):
             field_name, _ = personal_info_questions[step]
@@ -723,7 +964,7 @@ async def handle_menu(update: Update, context):
                 )
         return
     
-    # پردازش اطلاعات کسب و کار
+    # ===== پردازش اطلاعات کسب و کار =====
     if section == "business":
         if step < len(business_info_questions):
             field_name, _ = business_info_questions[step]
@@ -743,7 +984,7 @@ async def handle_menu(update: Update, context):
                 )
         return
     
-    # پردازش پرسشنامه
+    # ===== پردازش پرسشنامه =====
     if section == "survey":
         if step < len(survey_questions):
             field_name, _ = survey_questions[step]
@@ -815,6 +1056,66 @@ async def handle_callback(update: Update, context):
     
     logger.info(f"کاربر {user_id} روی دکمه {data} کلیک کرد - بخش: {section}")
     
+    # ===== بررسی عضویت =====
+    if data == "check_membership":
+        is_member = await is_member_of_channel(user_id, context)
+        
+        if is_member:
+            await query.edit_message_reply_markup(reply_markup=None)
+            
+            user_info = get_user_info(user_id)
+            
+            if is_user_registered(user_id):
+                welcome_msg = f"""✨ خوش برگشتی {user_info.get('first_name')} عزیز!
+
+به سیناپس خوش اومدی. 🌱😍
+هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
+
+🟢 بازار کار
+🔵 کسب‌وکار
+🟣 مسئولیت اجتماعی
+🟠 مسیر رشد
+🔴 لیدی لجستیک
+🌱 محصولات سیناپس
+
+لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
+            else:
+                welcome_msg = """سلام سلام
+شهبازی هستم، مریم 😍🌱
+اینجا قراره هویت کسب و کار و برند خودتون رو بسازید و روز به روز فروش بیشتری رو تجربه کنین. 
+با من همراه باش
+
+به سیناپس خوش اومدی. 🌱😍
+هر آدمی در یکی از این مسیرها به دنبال رشد و توسعه برای ساختن یک ورژن بهتر از خودشه. تو از کجا میخوای شروع کنی؟
+
+🟢 بازار کار
+🔵 کسب‌وکار
+🟣 مسئولیت اجتماعی
+🟠 مسیر رشد
+🔴 لیدی لجستیک
+🌱 محصولات سیناپس
+
+لطفاً مسیر موردنظرت را انتخاب کن. 👇"""
+
+            await query.message.reply_text(
+                welcome_msg,
+                reply_markup=main_menu,
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ **هنوز عضو کانال نشده‌اید!**\n\n"
+                f"📢 لطفاً ابتدا در کانال {CHANNEL_ID} عضو شوید.\n"
+                f"✅ سپس روی دکمه 'بررسی عضویت' کلیک کنید.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+                    [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")]
+                ]),
+                parse_mode='Markdown'
+            )
+        return
+    
+    # ===== تایید ثبت =====
     if data == "confirm":
         try:
             if section == "personal_confirm":
@@ -879,6 +1180,7 @@ async def handle_callback(update: Update, context):
             )
             clear_user_state(user_id)
     
+    # ===== ویرایش =====
     elif data == "edit":
         if section == "personal_confirm":
             new_section = "personal"
@@ -904,6 +1206,7 @@ async def handle_callback(update: Update, context):
             parse_mode='Markdown'
         )
     
+    # ===== انصراف =====
     elif data == "cancel":
         clear_user_state(user_id)
         await query.edit_message_reply_markup(reply_markup=None)
@@ -932,7 +1235,7 @@ async def get_excel(update: Update, context):
                 filename=f'users_data_{datetime.now().strftime("%Y%m%d_%H%M")}.xlsx',
                 caption="📊 **گزارش کامل کاربران**\n\n"
                        f"📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-                       "📋 شامل: اطلاعات کاربران + پرسشنامه + آمار"
+                       "📋 شامل: اطلاعات کاربران + فرم ارزیابی + پرسشنامه + آمار"
             )
     except Exception as e:
         await update.message.reply_text(f"⚠️ خطا در تولید فایل: {str(e)}")
@@ -949,6 +1252,10 @@ async def get_data(update: Update, context):
     if os.path.exists(SURVEY_FILE):
         with open(SURVEY_FILE, 'rb') as f:
             await update.message.reply_document(f, filename=f'survey_{datetime.now().strftime("%Y%m%d")}.json')
+    
+    if os.path.exists(ASSESSMENT_FILE):
+        with open(ASSESSMENT_FILE, 'rb') as f:
+            await update.message.reply_document(f, filename=f'assessment_{datetime.now().strftime("%Y%m%d")}.json')
 
 async def show_summary(update: Update, context):
     if update.effective_user.id != ADMIN_ID:
@@ -957,6 +1264,7 @@ async def show_summary(update: Update, context):
     
     users = read_json(USERS_FILE, {})
     surveys = read_json(SURVEY_FILE, {})
+    assessments = read_json(ASSESSMENT_FILE, {})
     
     completed_surveys = sum(1 for u in surveys if len(surveys[u]) > 2)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -964,7 +1272,8 @@ async def show_summary(update: Update, context):
     
     summary = f"📊 **آمار کلی:**\n\n"
     summary += f"👥 کل کاربران: {len(users)}\n"
-    summary += f"📋 پرسشنامه‌های تکمیل شده: {completed_surveys}\n"
+    summary += f"📋 فرم‌های ارزیابی تکمیل شده: {len(assessments)}\n"
+    summary += f"📊 پرسشنامه‌های تکمیل شده: {completed_surveys}\n"
     summary += f"🆕 کاربران امروز: {today_users}\n\n"
     summary += "**آخرین ۵ کاربر:**\n"
     
@@ -1016,7 +1325,7 @@ app.add_handler(CommandHandler("broadcast", broadcast))
 app.add_handler(CallbackQueryHandler(handle_callback))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
-print("🤖 بات سیناپس با قابلیت‌های جدید روشن شد...")
+print("🤖 بات سیناپس با فرم ارزیابی روشن شد...")
 print(f"📢 کانال اجباری: {CHANNEL_ID}")
 print("📁 اطلاعات در فایل‌های JSON ذخیره می‌شوند")
 print(f"👑 ادمین: {ADMIN_ID}")
