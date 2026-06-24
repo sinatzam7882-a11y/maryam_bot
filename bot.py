@@ -58,6 +58,7 @@ def save_user_info(user_id, info):
     users[str(user_id)].update(info)
     users[str(user_id)]["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_json(USERS_FILE, users)
+    logger.info(f"اطلاعات کاربر {user_id} ذخیره شد")
 
 def save_survey_answer(user_id, section, answer):
     surveys = read_json(SURVEY_FILE, {})
@@ -71,14 +72,10 @@ def get_user_info(user_id):
     users = read_json(USERS_FILE, {})
     return users.get(str(user_id), {})
 
-def delete_user_info(user_id):
-    """حذف اطلاعات کاربر (وقتی انصراف می‌دهد)"""
+def is_user_registered(user_id):
+    """بررسی اینکه کاربر قبلاً ثبت‌نام کرده یا نه"""
     users = read_json(USERS_FILE, {})
-    if str(user_id) in users:
-        del users[str(user_id)]
-        write_json(USERS_FILE, users)
-        return True
-    return False
+    return str(user_id) in users and users[str(user_id)].get("first_name") is not None
 
 # ==================== خروجی اکسل ====================
 def generate_excel_report():
@@ -242,14 +239,20 @@ def clear_user_state(user_id):
         del user_states[user_id]
 
 # ==================== نوتیفیکیشن به ادمین ====================
-async def notify_admin(context, user_id, info):
+async def notify_admin(context, user_id, info, section_type="personal"):
     try:
-        message = f"🆕 **کاربر جدید ثبت‌نام کرد!**\n\n"
-        message += f"👤 نام: {info.get('first_name', '')} {info.get('last_name', '')}\n"
-        message += f"🏙️ شهر: {info.get('city', '')}\n"
-        message += f"🏢 کسب و کار: {info.get('business_name', '')}\n"
-        message += f"📞 شماره: {info.get('phone', '')}\n"
-        message += f"🆔 آیدی: `{user_id}`"
+        if section_type == "personal":
+            message = f"🆕 **کاربر جدید ثبت‌نام کرد!**\n\n"
+            message += f"👤 نام: {info.get('first_name', '')} {info.get('last_name', '')}\n"
+            message += f"🏙️ شهر: {info.get('city', '')}\n"
+            message += f"📞 شماره: {info.get('phone', '')}\n"
+            message += f"🆔 آیدی: `{user_id}`"
+        else:
+            message = f"🏢 **اطلاعات کسب و کار جدید!**\n\n"
+            message += f"👤 کاربر: {info.get('first_name', '')} {info.get('last_name', '')}\n"
+            message += f"🏢 نام کسب و کار: {info.get('business_name', '')}\n"
+            message += f"📍 آدرس: {info.get('address', '')}\n"
+            message += f"🆔 آیدی: `{user_id}`"
         
         await context.bot.send_message(chat_id=ADMIN_ID, text=message, parse_mode='Markdown')
     except Exception as e:
@@ -321,7 +324,20 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات شخصی ==========
     if text == "🆔 اطلاعات شخصی":
-        # پاک کردن وضعیت قبلی برای شروع مجدد
+        # چک کن کاربر قبلاً ثبت‌نام کرده یا نه
+        if is_user_registered(user_id):
+            user_info = get_user_info(user_id)
+            await update.message.reply_text(
+                f"✅ **شما قبلاً ثبت‌نام کرده‌اید!**\n\n"
+                f"👤 نام: {user_info.get('first_name', '')} {user_info.get('last_name', '')}\n"
+                f"🏙️ شهر: {user_info.get('city', '')}\n"
+                f"📞 شماره: {user_info.get('phone', '')}\n\n"
+                f"برای ویرایش اطلاعات، روی دکمه زیر کلیک کنید 👇",
+                reply_markup=main_menu
+            )
+            return
+        
+        # شروع ثبت‌نام جدید
         clear_user_state(user_id)
         set_user_state(user_id, "personal", 0, {})
         await update.message.reply_text(
@@ -333,6 +349,27 @@ async def handle_menu(update: Update, context):
     
     # ========== اطلاعات کسب و کار ==========
     if text == "🏢 اطلاعات کسب و کار":
+        # چک کن کاربر قبلاً ثبت‌نام کرده یا نه
+        if not is_user_registered(user_id):
+            await update.message.reply_text(
+                "⚠️ لطفاً ابتدا در بخش '🆔 اطلاعات شخصی' ثبت‌نام کنید.",
+                reply_markup=main_menu
+            )
+            return
+        
+        user_info = get_user_info(user_id)
+        if user_info.get("business_name"):
+            await update.message.reply_text(
+                f"✅ **اطلاعات کسب و کار شما قبلاً ثبت شده:**\n\n"
+                f"🏢 نام کسب و کار: {user_info.get('business_name', '')}\n"
+                f"📍 آدرس: {user_info.get('address', '')}\n"
+                f"📢 راه معرفی: {user_info.get('referral_source', '')}\n\n"
+                f"برای ویرایش، روی دکمه 'اطلاعات کسب و کار' کلیک کنید.",
+                reply_markup=main_menu
+            )
+            return
+        
+        # شروع ثبت اطلاعات کسب و کار
         clear_user_state(user_id)
         set_user_state(user_id, "business", 0, {})
         await update.message.reply_text(
@@ -344,13 +381,18 @@ async def handle_menu(update: Update, context):
     
     # ========== پرسشنامه ==========
     if text == "📊 پرسشنامه تخصصی":
-        user_info = get_user_info(user_id)
-        if not user_info.get("first_name"):
+        if not is_user_registered(user_id):
             await update.message.reply_text(
-                "⚠️ لطفاً ابتدا اطلاعات خود را در بخش‌های زیر ثبت کنید:\n"
-                "• 🆔 اطلاعات شخصی\n"
-                "• 🏢 اطلاعات کسب و کار\n\n"
-                "سپس می‌توانید پرسشنامه را پر کنید.",
+                "⚠️ لطفاً ابتدا در بخش '🆔 اطلاعات شخصی' ثبت‌نام کنید.",
+                reply_markup=main_menu
+            )
+            return
+        
+        user_info = get_user_info(user_id)
+        if not user_info.get("business_name"):
+            await update.message.reply_text(
+                "⚠️ لطفاً ابتدا اطلاعات کسب و کار خود را ثبت کنید.\n"
+                "بخش '🏢 اطلاعات کسب و کار'",
                 reply_markup=main_menu
             )
             return
@@ -359,7 +401,7 @@ async def handle_menu(update: Update, context):
         if str(user_id) in surveys and len(surveys[str(user_id)]) > 2:
             await update.message.reply_text(
                 "✅ شما قبلاً پرسشنامه را تکمیل کرده‌اید.\n"
-                "از بخش 'مشاوره هوشمند' می‌توانید سوالات خود را بپرسید.",
+                "از بخش '💬 مشاوره هوشمند' می‌توانید سوالات خود را بپرسید.",
                 reply_markup=main_menu
             )
             return
@@ -375,10 +417,9 @@ async def handle_menu(update: Update, context):
     
     # ========== مشاوره ==========
     if text == "💬 مشاوره هوشمند":
-        user_info = get_user_info(user_id)
-        if not user_info.get("first_name"):
+        if not is_user_registered(user_id):
             await update.message.reply_text(
-                "⚠️ لطفاً ابتدا در بخش 'اطلاعات شخصی' ثبت‌نام کنید.",
+                "⚠️ لطفاً ابتدا در بخش '🆔 اطلاعات شخصی' ثبت‌نام کنید.",
                 reply_markup=main_menu
             )
             return
@@ -493,35 +534,36 @@ async def handle_menu(update: Update, context):
     
     # ========== گفتگو با Groq ==========
     if state["section"] is None:
-        user_info = get_user_info(user_id)
-        if user_info.get("first_name"):
-            try:
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[
-                        {"role": "system", "content": f"""تو یک مشاور کسب و کار حرفه‌ای هستی به نام مریم شهبازی.
-                        اطلاعات کاربر: نام: {user_info.get('first_name', '')} {user_info.get('last_name', '')}
-                        کسب و کار: {user_info.get('business_name', '')}
-                        با لحنی گرم و دوستانه پاسخ بده. حتما به فارسی روان پاسخ بده."""},
-                        {"role": "user", "content": text}
-                    ],
-                    temperature=0.7,
-                    max_tokens=1000
-                )
-                await update.message.reply_text(
-                    response.choices[0].message.content,
-                    reply_markup=back_menu
-                )
-            except Exception as e:
-                logger.error(f"خطا در Groq: {e}")
-                await update.message.reply_text(
-                    "⚠️ خطا در ارتباط با سرور. لطفاً چند لحظه دیگر تلاش کنید.",
-                    reply_markup=back_menu
-                )
-        else:
+        if not is_user_registered(user_id):
             await update.message.reply_text(
-                "⚠️ لطفاً ابتدا در بخش 'اطلاعات شخصی' ثبت‌نام کنید.",
+                "⚠️ لطفاً ابتدا در بخش '🆔 اطلاعات شخصی' ثبت‌نام کنید.",
                 reply_markup=main_menu
+            )
+            return
+        
+        user_info = get_user_info(user_id)
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": f"""تو یک مشاور کسب و کار حرفه‌ای هستی به نام مریم شهبازی.
+                    اطلاعات کاربر: نام: {user_info.get('first_name', '')} {user_info.get('last_name', '')}
+                    کسب و کار: {user_info.get('business_name', '')}
+                    با لحنی گرم و دوستانه پاسخ بده. حتما به فارسی روان پاسخ بده."""},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+            await update.message.reply_text(
+                response.choices[0].message.content,
+                reply_markup=back_menu
+            )
+        except Exception as e:
+            logger.error(f"خطا در Groq: {e}")
+            await update.message.reply_text(
+                "⚠️ خطا در ارتباط با سرور. لطفاً چند لحظه دیگر تلاش کنید.",
+                reply_markup=back_menu
             )
 
 # ==================== دکمه‌های اینلاین ====================
@@ -540,7 +582,7 @@ async def handle_callback(update: Update, context):
         if "personal" in section:
             # ذخیره اطلاعات شخصی
             save_user_info(user_id, temp)
-            await notify_admin(context, user_id, temp)
+            await notify_admin(context, user_id, temp, "personal")
             
             await query.edit_message_text(
                 f"✅ **ثبت‌نام با موفقیت انجام شد!** 🎉\n\n"
@@ -558,7 +600,11 @@ async def handle_callback(update: Update, context):
             )
             
         elif "business" in section:
+            # دریافت اطلاعات کاربر برای ذخیره کامل
+            user_info = get_user_info(user_id)
+            temp.update(user_info)  # اطلاعات شخصی رو هم نگه دار
             save_user_info(user_id, temp)
+            await notify_admin(context, user_id, temp, "business")
             
             await query.edit_message_text(
                 f"✅ **اطلاعات کسب و کار شما ثبت شد!** 🏢\n\n"
